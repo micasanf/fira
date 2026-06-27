@@ -5,22 +5,7 @@ import { PostCard, Post, PostComment } from "@/components/ui/post-card";
 import { CreatePost } from "@/components/ui/create-post";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { db } from "@/lib/firebase";
-import {
-  collection,
-  query,
-  orderBy,
-  onSnapshot,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  arrayUnion,
-  arrayRemove,
-  increment,
-  serverTimestamp,
-  Timestamp,
-} from "firebase/firestore";
+import { db, collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, arrayUnion, arrayRemove, increment, serverTimestamp, Timestamp } from '@/lib/firebase';
 import { Loader2 } from "lucide-react";
 
 interface FeedProps {
@@ -56,10 +41,10 @@ export function Feed({ className }: FeedProps) {
           likes: data.likes || [],
           comments: (data.comments || []).map((c: any) => ({
             ...c,
-            createdAt: c.createdAt?.toDate?.() || new Date(),
+            createdAt: c.createdAt ? new Date(c.createdAt) : new Date(),
           })),
           shares: data.shares || 0,
-          createdAt: data.createdAt?.toDate?.() || new Date(),
+          createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
         } as Post;
       });
       setPosts(postsData);

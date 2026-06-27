@@ -47,7 +47,7 @@ export function HoverProfileCard({
           const { data, error } = await supabase
             .from("public_profiles")
             .select("*")
-            .eq("uid", userId)
+            .eq("id", userId)
             .single()
 
           if (!error && data) {

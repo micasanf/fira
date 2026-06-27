@@ -83,7 +83,7 @@ export default function SignupPage() {
 
       // Insert user profile
       const { error: profileError } = await supabase.from("users").insert({
-        uid: user.id,
+        id: user.id,
         email: values.email,
         display_name: values.fullName,
         first_name: firstName,
@@ -96,7 +96,7 @@ export default function SignupPage() {
 
       // Insert public profile
       await supabase.from("public_profiles").insert({
-        uid: user.id,
+        id: user.id,
         display_name: values.fullName,
         first_name: firstName,
         last_name: lastName,

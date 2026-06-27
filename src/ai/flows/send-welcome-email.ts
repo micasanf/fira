@@ -9,12 +9,7 @@
 import { ai } from "@/ai/genkit";
 import { z } from "genkit";
 import { Resend } from "resend";
-import { db } from "@/lib/firebase";
-import {
-  doc,
-  increment,
-  runTransaction,
-} from "firebase/firestore";
+import { db, doc, increment, runTransaction } from '@/lib/firebase';
 import { requireServerAuthenticatedUser } from "@/lib/server-auth";
 
 // Lazy initialization to avoid client-side errors

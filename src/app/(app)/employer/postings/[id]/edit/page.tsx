@@ -5,8 +5,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import Link from "next/link";
 import { useRouter, useParams } from "next/navigation";
-import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { db, auth } from "@/lib/firebase";
+import { auth,db,doc,getDoc,serverTimestamp,updateDoc } from '@/lib/firebase';
 import { useEffect, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";

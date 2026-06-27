@@ -1,4 +1,4 @@
-import { Timestamp } from "firebase-admin/firestore";
+import { Timestamp } from '@/lib/firebase-admin';
 import { adminDb } from "@/lib/firebase-admin";
 
 export type AiRateLimitKey =

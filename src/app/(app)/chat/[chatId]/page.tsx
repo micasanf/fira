@@ -8,8 +8,7 @@ import { useAuth } from "@/context/AuthContext";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
-import { doc, getDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db,doc,getDoc } from '@/lib/firebase';
 
 function ChatRoomContent() {
   const params = useParams();

@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { collection,db,getDocs,query,where } from '@/lib/firebase';
 import {
   Card,
   CardContent,

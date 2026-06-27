@@ -67,7 +67,7 @@ export function FollowersModal({
         const { data, error } = await supabase
           .from("public_profiles")
           .select("*")
-          .in("uid", userIds);
+          .in("id", userIds);
 
         if (!error && data) {
           for (const profile of data) {

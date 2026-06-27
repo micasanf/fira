@@ -4,74 +4,153 @@
  * This provides Firestore-like APIs backed by Supabase.
  * Allows gradual migration — existing Firestore-style code works
  * while we rewrite to native Supabase queries.
+ * 
+ * All tables use `id` as the primary key column.
+ * The `users` table's `id` is the Supabase Auth UID.
  */
 
 import { supabase } from './supabase';
 
-// ============ Query Builders ============
+// ============ Special Value Markers ============
+// These are used in updateDoc() to represent atomic operations
 
-export function doc(_db: any, collection: string, id?: string) {
-  return { collection, id };
+interface ArrayUnionMarker {
+  __type: 'arrayUnion';
+  elements: any[];
 }
 
-export function collection(_db: any, name: string) {
-  return { collection: name };
+interface ArrayRemoveMarker {
+  __type: 'arrayRemove';
+  elements: any[];
+}
+
+interface IncrementMarker {
+  __type: 'increment';
+  value: number;
+}
+
+export function arrayUnion(...elements: any[]): ArrayUnionMarker {
+  return { __type: 'arrayUnion', elements };
+}
+
+export function arrayRemove(...elements: any[]): ArrayRemoveMarker {
+  return { __type: 'arrayRemove', elements };
+}
+
+export function increment(value: number = 1): IncrementMarker {
+  return { __type: 'increment', value };
+}
+
+// ============ FieldValue compat (firebase-admin/firestore) ============
+
+export const FieldValue = {
+  increment: (n: number = 1) => increment(n),
+  arrayUnion: (...elements: any[]) => arrayUnion(...elements),
+  arrayRemove: (...elements: any[]) => arrayRemove(...elements),
+  serverTimestamp: () => new Date().toISOString(),
+  delete: () => null, // Field delete - in Supabase, set to null
+};
+
+// ============ Query Builders ============
+
+// doc() supports multiple patterns:
+// - doc(db, "users", userId) → { collection: "users", id: userId }
+// - doc(db, "users", userId, "applications", appId) → subcollection pattern
+export function doc(_db: any, ...args: string[]) {
+  if (args.length === 2) {
+    // Simple: doc(db, "collection", "id")
+    return { collection: args[0], id: args[1] };
+  }
+  if (args.length === 4) {
+    // Subcollection: doc(db, "parentCollection", "parentId", "subCollection", "subId")
+    // Map to: { collection: "subCollection", id: "subId", parentId: args[1], parentCollection: args[0] }
+    return { collection: args[2], id: args[3], parentId: args[1], parentCollection: args[0] };
+  }
+  // Fallback
+  return { collection: args[0], id: args[1] };
+}
+
+// collection() supports multiple patterns:
+// - collection(db, "users") → { collection: "users" }
+// - collection(db, "users", userId, "applications") → subcollection pattern
+export function collection(_db: any, ...args: string[]) {
+  if (args.length === 1) {
+    return { collection: args[0] };
+  }
+  if (args.length === 3) {
+    // Subcollection: collection(db, "parentCollection", "parentId", "subCollection")
+    // Map to: { collection: "subCollection", parentId: args[1], parentCollection: args[0] }
+    return { collection: args[2], parentId: args[1], parentCollection: args[0] };
+  }
+  return { collection: args[0] };
 }
 
 // ============ Get Operations ============
 
-export async function getDoc(ref: { collection: string; id?: string }) {
+export async function getDoc(ref: any) {
   if (!ref.id) throw new Error('Document ID required');
-  const { data, error } = await supabase
-    .from(ref.collection)
-    .select('*')
-    .eq('uid', ref.id)
-    .single();
+  
+  let q = supabase.from(ref.collection).select('*').eq('id', ref.id);
+  
+  // Add parent filter for subcollection patterns
+  if (ref.parentId && ref.parentCollection) {
+    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    q = q.eq(parentField, ref.parentId);
+  }
+  
+  const { data, error } = await q.single();
   
   return {
-    exists: !!data,
+    exists: () => !!data,
     data: () => data,
     id: ref.id,
+    get: (field: string) => data?.[field],
   };
 }
 
 export async function getDocs(queryRef: any) {
-  // queryRef can be a collection ref or a query
-  let query = supabase.from(queryRef.collection || queryRef.table).select('*');
+  let q = supabase.from(queryRef.collection || queryRef.table).select('*');
+  
+  // Add parent filter for subcollection patterns
+  if (queryRef.parentId && queryRef.parentCollection) {
+    const parentField = queryRef.parentCollection === 'users' ? 'userId' : `${queryRef.parentCollection}Id`;
+    q = q.eq(parentField, queryRef.parentId);
+  }
   
   // Apply filters if any
   if (queryRef.filters) {
     for (const f of queryRef.filters) {
-      if (f.op === '==') query = query.eq(f.field, f.value);
-      else if (f.op === '!=') query = query.neq(f.field, f.value);
-      else if (f.op === '>') query = query.gt(f.field, f.value);
-      else if (f.op === '<') query = query.lt(f.field, f.value);
-      else if (f.op === '>=') query = query.gte(f.field, f.value);
-      else if (f.op === '<=') query = query.lte(f.field, f.value);
-      else if (f.op === 'in') query = query.in(f.field, f.value);
-      else if (f.op === 'array-contains') query = query.contains(f.field, [f.value]);
+      if (f.op === '==') q = q.eq(f.field, f.value);
+      else if (f.op === '!=') q = q.neq(f.field, f.value);
+      else if (f.op === '>') q = q.gt(f.field, f.value);
+      else if (f.op === '<') q = q.lt(f.field, f.value);
+      else if (f.op === '>=') q = q.gte(f.field, f.value);
+      else if (f.op === '<=') q = q.lte(f.field, f.value);
+      else if (f.op === 'in') q = q.in(f.field, f.value);
+      else if (f.op === 'array-contains') q = q.contains(f.field, [f.value]);
     }
   }
   
   // Apply ordering
   if (queryRef.orders) {
     for (const o of queryRef.orders) {
-      query = query.order(o.field, { ascending: o.ascending });
+      q = q.order(o.field, { ascending: o.ascending });
     }
   }
   
   // Apply limit
   if (queryRef.limitCount) {
-    query = query.limit(queryRef.limitCount);
+    q = q.limit(queryRef.limitCount);
   }
   
-  const { data, error } = await query;
+  const { data, error } = await q;
   
   return {
     docs: (data || []).map((doc: any) => ({
-      id: doc.id || doc.uid,
+      id: doc.id,
       data: () => doc,
       exists: true,
+      get: (field: string) => doc[field],
     })),
     empty: !data || data.length === 0,
     size: data?.length || 0,
@@ -81,36 +160,43 @@ export async function getDocs(queryRef: any) {
 // ============ Write Operations ============
 
 export async function setDoc(
-  ref: { collection: string; id?: string },
+  ref: any,
   data: any,
   options?: { merge?: boolean }
 ) {
   if (!ref.id) throw new Error('Document ID required');
   
-  const record = { uid: ref.id, ...data };
+  let record = { id: ref.id, ...data };
   
-  if (options?.merge) {
-    const { error } = await supabase
-      .from(ref.collection)
-      .upsert(record, { onConflict: 'uid' });
-    if (error) throw error;
-  } else {
-    const { error } = await supabase
-      .from(ref.collection)
-      .upsert(record, { onConflict: 'uid' });
-    if (error) throw error;
+  // Add parent reference for subcollection patterns
+  if (ref.parentId && ref.parentCollection) {
+    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    record[parentField] = ref.parentId;
   }
   
+  const { error } = await supabase
+    .from(ref.collection)
+    .upsert(record, { onConflict: 'id' });
+  
+  if (error) throw error;
   return { id: ref.id };
 }
 
 export async function addDoc(
-  ref: { collection: string },
+  ref: any,
   data: any
 ) {
+  let record = { ...data };
+  
+  // Add parent reference for subcollection patterns
+  if (ref.parentId && ref.parentCollection) {
+    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    record[parentField] = ref.parentId;
+  }
+  
   const { data: result, error } = await supabase
     .from(ref.collection)
-    .insert(data)
+    .insert(record)
     .select()
     .single();
   
@@ -118,37 +204,104 @@ export async function addDoc(
   return { id: result?.id };
 }
 
+// Helper: apply special markers to update data
+async function applySpecialMarkers(
+  collection: string,
+  id: string,
+  data: Record<string, any>
+): Promise<Record<string, any>> {
+  const processedData: Record<string, any> = {};
+  let needsRead = false;
+
+  // Check if any values are special markers
+  for (const [key, value] of Object.entries(data)) {
+    if (value && typeof value === 'object') {
+      if (value.__type === 'arrayUnion' || value.__type === 'arrayRemove' || value.__type === 'increment') {
+        needsRead = true;
+        break;
+      }
+    }
+  }
+
+  let currentData: Record<string, any> | null = null;
+
+  if (needsRead) {
+    const { data: existing } = await supabase
+      .from(collection)
+      .select('*')
+      .eq('id', id)
+      .single();
+    currentData = existing;
+  }
+
+  for (const [key, value] of Object.entries(data)) {
+    if (value && typeof value === 'object') {
+      if (value.__type === 'arrayUnion') {
+        // Append elements to array
+        const currentArray = currentData?.[key] || [];
+        processedData[key] = [...currentArray, ...value.elements];
+      } else if (value.__type === 'arrayRemove') {
+        // Remove elements from array
+        const currentArray = currentData?.[key] || [];
+        processedData[key] = currentArray.filter(
+          (item: any) => !value.elements.some(el => JSON.stringify(el) === JSON.stringify(item))
+        );
+      } else if (value.__type === 'increment') {
+        // Increment numeric value
+        const currentVal = currentData?.[key] || 0;
+        processedData[key] = currentVal + value.value;
+      } else {
+        processedData[key] = value;
+      }
+    } else {
+      processedData[key] = value;
+    }
+  }
+
+  return processedData;
+}
+
 export async function updateDoc(
-  ref: { collection: string; id?: string },
+  ref: any,
   data: any
 ) {
   if (!ref.id) throw new Error('Document ID required');
   
-  const { error } = await supabase
-    .from(ref.collection)
-    .update(data)
-    .eq('uid', ref.id);
+  const processedData = await applySpecialMarkers(ref.collection, ref.id, data);
   
+  let q = supabase.from(ref.collection).update(processedData).eq('id', ref.id);
+  
+  // Add parent filter for subcollection patterns
+  if (ref.parentId && ref.parentCollection) {
+    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    q = q.eq(parentField, ref.parentId);
+  }
+  
+  const { error } = await q;
   if (error) throw error;
 }
 
 export async function deleteDoc(
-  ref: { collection: string; id?: string }
+  ref: any
 ) {
   if (!ref.id) throw new Error('Document ID required');
   
-  const { error } = await supabase
-    .from(ref.collection)
-    .delete()
-    .eq('uid', ref.id);
+  let q = supabase.from(ref.collection).delete().eq('id', ref.id);
   
+  // Add parent filter for subcollection patterns
+  if (ref.parentId && ref.parentCollection) {
+    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    q = q.eq(parentField, ref.parentId);
+  }
+  
+  const { error } = await q;
   if (error) throw error;
 }
 
 // ============ Query Builder ============
 
 export function query(ref: any, ...constraints: any[]) {
-  let result = { ...ref, filters: [], orders: [] };
+  let result = { ...ref, filters: ref.filters ? [...ref.filters] : [], orders: ref.orders ? [...ref.orders] : [] };
   
   for (const constraint of constraints) {
     if (constraint.type === 'where') {
@@ -178,9 +331,12 @@ export function limit(count: number) {
 // ============ Timestamp ============
 
 export const serverTimestamp = () => new Date().toISOString();
+
 export const Timestamp = {
   now: () => new Date().toISOString(),
   fromDate: (date: Date) => date.toISOString(),
+  fromMillis: (ms: number) => new Date(ms).toISOString(),
+  toDate: (isoString: string) => new Date(isoString),
 };
 
 // ============ Realtime ============
@@ -191,7 +347,7 @@ export function onSnapshot(
   errorCallback?: (error: any) => void
 ) {
   // For document snapshots
-  if (ref.id) {
+  if (ref.id && !ref.parentId) {
     const channel = supabase
       .channel(`doc-${ref.collection}-${ref.id}`)
       .on(
@@ -200,11 +356,11 @@ export function onSnapshot(
           event: '*',
           schema: 'public',
           table: ref.collection,
-          filter: `uid=eq.${ref.id}`,
+          filter: `id=eq.${ref.id}`,
         },
         async (payload) => {
           callback({
-            exists: true,
+            exists: () => true,
             data: () => payload.new,
             id: ref.id,
           });
@@ -218,15 +374,15 @@ export function onSnapshot(
     return () => supabase.removeChannel(channel);
   }
   
-  // For collection snapshots
+  // For collection snapshots (including subcollections)
   const channel = supabase
-    .channel(`collection-${ref.collection || ref.table}`)
+    .channel(`collection-${ref.collection}-${ref.parentId || 'all'}`)
     .on(
       'postgres_changes',
       {
         event: '*',
         schema: 'public',
-        table: ref.collection || ref.table,
+        table: ref.collection,
       },
       async () => {
         // Refetch all docs
@@ -240,6 +396,51 @@ export function onSnapshot(
   getDocs(ref).then(callback).catch(errorCallback);
   
   return () => supabase.removeChannel(channel);
+}
+
+// ============ Transaction Support ============
+
+export async function runTransaction(
+  _db: any,
+  updateFunction: (transaction: any) => Promise<any>
+) {
+  // Simplified transaction - retries on conflict
+  const MAX_RETRIES = 3;
+  let lastError: any;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const transaction = {
+        get: async (ref: { collection: string; id?: string }) => {
+          return getDoc(ref);
+        },
+        set: async (ref: { collection: string; id?: string }, data: any, options?: any) => {
+          return setDoc(ref, data, options);
+        },
+        update: async (ref: { collection: string; id?: string }, data: any) => {
+          const processedData = await applySpecialMarkers(ref.collection, ref.id!, data);
+          const { error } = await supabase
+            .from(ref.collection)
+            .update(processedData)
+            .eq('id', ref.id);
+          if (error) throw error;
+        },
+        delete: async (ref: { collection: string; id?: string }) => {
+          return deleteDoc(ref);
+        },
+      };
+
+      const result = await updateFunction(transaction);
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (attempt < MAX_RETRIES - 1) {
+        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 // ============ Auth Compatibility ============

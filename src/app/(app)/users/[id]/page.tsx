@@ -3,21 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  doc,
-  getDoc,
-  collection,
-  query,
-  where,
-  orderBy,
-  onSnapshot,
-  updateDoc,
-  arrayUnion,
-  arrayRemove,
-  getDocs,
-  limit,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, doc, getDoc, collection, query, where, orderBy, onSnapshot, updateDoc, arrayUnion, arrayRemove, getDocs, limit } from '@/lib/firebase';
 import { useAuth } from "@/context/AuthContext";
 import { useChat } from "@/context/ChatContext";
 import { useToast } from "@/hooks/use-toast";

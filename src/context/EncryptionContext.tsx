@@ -74,7 +74,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
           const { data: userData } = await supabase
             .from("users")
             .select("encryption_public_key")
-            .eq("uid", user.id)
+            .eq("id", user.id)
             .single();
           
           if (userData?.encryption_public_key) {
@@ -115,7 +115,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
         .from("users")
         .upsert(
           { uid: user.id, encryption_public_key: exportedPublic },
-          { onConflict: "uid" }
+          { onConflict: "id" }
         );
 
       // Store public key in public_profiles table
@@ -123,7 +123,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
         .from("public_profiles")
         .upsert(
           { uid: user.id, encryption_public_key: exportedPublic, updated_at: new Date().toISOString() },
-          { onConflict: "uid" }
+          { onConflict: "id" }
         );
 
       setPrivateKey(keyPair.privateKey);
@@ -150,7 +150,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
       const { data: otherUserData } = await supabase
         .from("public_profiles")
         .select("encryption_public_key")
-        .eq("uid", otherUserId)
+        .eq("id", otherUserId)
         .single();
       
       if (!otherUserData?.encryption_public_key) {

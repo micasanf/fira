@@ -2,7 +2,7 @@
 
 import { Resend } from "resend";
 import { adminDb } from "@/lib/firebase-admin";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue } from '@/lib/firebase-admin';
 import { requireServerAuthenticatedUser, requireServerRole } from "@/lib/server-auth";
 
 // Lazy initialization to avoid client-side errors

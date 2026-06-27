@@ -24,18 +24,7 @@ import {
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState, useEffect, useMemo } from "react";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  orderBy,
-  updateDoc,
-  doc,
-  getDoc,
-  setDoc,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, collection, query, where, getDocs, orderBy, updateDoc, doc, getDoc, setDoc } from '@/lib/firebase';
 import {
   findAndRankCandidates,
   FindAndRankCandidatesOutput,

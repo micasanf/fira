@@ -2,15 +2,82 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { User } from '@supabase/supabase-js';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 interface UserProfile {
   role: string;
   [key: string]: any;
 }
 
+// Compat user type that bridges Firebase's User API to Supabase's User API
+// This way, existing code using user.uid, user.displayName, user.photoURL, user.getIdToken()
+// continues to work without changes.
+interface CompatUser {
+  // Supabase native properties
+  id: string;
+  email?: string | null;
+  app_metadata: Record<string, any>;
+  user_metadata: Record<string, any>;
+  aud: string;
+  created_at: string;
+  
+  // Firebase compat properties
+  uid: string;  // alias for id
+  displayName: string | null;  // from user_metadata.full_name
+  photoURL: string | null;  // from user_metadata.avatar_url
+  phoneNumber: string | null;
+  emailVerified: boolean;
+  isAnonymous: boolean;
+  providerData: any[];
+  refreshToken: string;
+  tenantId: string | null;
+  
+  // Firebase compat methods
+  getIdToken: () => Promise<string>;
+  toJSON: () => Record<string, any>;
+  delete: () => Promise<void>;
+  
+  // Allow any other properties
+  [key: string]: any;
+}
+
+function createCompatUser(supabaseUser: SupabaseUser): CompatUser {
+  return {
+    // Native Supabase properties
+    id: supabaseUser.id,
+    email: supabaseUser.email,
+    app_metadata: supabaseUser.app_metadata,
+    user_metadata: supabaseUser.user_metadata,
+    aud: supabaseUser.aud,
+    created_at: supabaseUser.created_at,
+    
+    // Firebase compat
+    uid: supabaseUser.id,
+    displayName: supabaseUser.user_metadata?.full_name || supabaseUser.user_metadata?.name || null,
+    photoURL: supabaseUser.user_metadata?.avatar_url || null,
+    phoneNumber: supabaseUser.user_metadata?.phone || null,
+    emailVerified: supabaseUser.email_confirmed_at != null,
+    isAnonymous: false,
+    providerData: [],
+    refreshToken: supabaseUser.refresh_token || '',
+    tenantId: null,
+    
+    // Firebase compat methods
+    async getIdToken() {
+      const { data } = await supabase.auth.getSession();
+      return data.session?.access_token || '';
+    },
+    toJSON() {
+      return { ...supabaseUser };
+    },
+    async delete() {
+      throw new Error('User deletion should be done via Supabase Admin API');
+    },
+  };
+}
+
 interface AuthContextType {
-  user: User | null;
+  user: CompatUser | null;
   loading: boolean;
   role: string | null;
   userProfile: UserProfile | null;
@@ -19,7 +86,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<CompatUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -28,11 +95,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Get initial session
     const initAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      setUser(session?.user ?? null);
-
+      
       if (session?.user) {
+        const compatUser = createCompatUser(session.user);
+        setUser(compatUser);
         await fetchUserProfile(session.user.id);
       } else {
+        setUser(null);
         setLoading(false);
       }
     };
@@ -42,11 +111,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
-        setUser(session?.user ?? null);
-
         if (session?.user) {
+          const compatUser = createCompatUser(session.user);
+          setUser(compatUser);
           await fetchUserProfile(session.user.id);
         } else {
+          setUser(null);
           setRole(null);
           setUserProfile(null);
           setLoading(false);
@@ -69,7 +139,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           event: 'UPDATE',
           schema: 'public',
           table: 'users',
-          filter: `uid=eq.${user.id}`,
+          filter: `id=eq.${user.id}`,
         },
         (payload) => {
           const profileData = payload.new as UserProfile;
@@ -90,7 +160,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const { data, error } = await supabase
         .from('users')
         .select('*')
-        .eq('uid', uid)
+        .eq('id', uid)
         .single();
 
       if (error) {

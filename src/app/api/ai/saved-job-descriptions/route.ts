@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue } from '@/lib/firebase-admin';
 import { adminDb } from "@/lib/firebase-admin";
 import { requireAuth } from "@/lib/api-auth";
 import { isAiRateLimitError } from "@/lib/ai-rate-limit";

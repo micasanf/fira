@@ -194,7 +194,7 @@ export function useChatActions(userId: string | undefined, userEmail: string | u
       const { data: currentUserData } = await supabase
         .from("users")
         .select("display_name, photo_url, role")
-        .eq("uid", userId)
+        .eq("id", userId)
         .single();
 
       const currentUserParticipant: {
@@ -273,7 +273,7 @@ export function useChatActions(userId: string | undefined, userEmail: string | u
       const { data: currentUserData } = await supabase
         .from("users")
         .select("display_name, photo_url, role")
-        .eq("uid", userId)
+        .eq("id", userId)
         .single();
 
       const currentUserParticipant: {

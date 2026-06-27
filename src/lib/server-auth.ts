@@ -22,7 +22,7 @@ export async function getServerAuthenticatedUser(): Promise<ServerAuthenticatedU
   const { data: profile } = await adminClient
     .from("users")
     .select("*")
-    .eq("uid", user.id)
+    .eq("id", user.id)
     .single();
 
   return {

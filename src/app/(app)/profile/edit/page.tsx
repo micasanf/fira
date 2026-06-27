@@ -5,9 +5,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useState, useTransition, useRef, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { doc, setDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { updateProfile } from "firebase/auth";
+import { db,doc,setDoc,auth } from '@/lib/firebase';
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -621,7 +619,7 @@ export default function ProfilePage() {
       const newDisplayName = `${values.firstName} ${values.lastName}`.trim();
 
       if (user.displayName !== newDisplayName) {
-        await updateProfile(user, { displayName: newDisplayName });
+        await auth.updateProfile({ displayName: newDisplayName });
       }
 
       // Prepare data with structured entries
@@ -722,7 +720,7 @@ export default function ProfilePage() {
 
       const { url } = await response.json();
 
-      await updateProfile(user, { photoURL: url });
+      await auth.updateProfile({ photoURL: url });
       await setDoc(
         doc(db, "users", user.uid),
         { photoURL: url },
@@ -933,7 +931,7 @@ export default function ProfilePage() {
                       if (!response.ok) throw new Error("Upload failed");
 
                       const { url } = await response.json();
-                      await updateProfile(user, { photoURL: url });
+                      await auth.updateProfile({ photoURL: url });
                       await setDoc(
                         doc(db, "users", user.uid),
                         { photoURL: url },

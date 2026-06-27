@@ -1,12 +1,8 @@
 "use server";
 
 import { Resend } from "resend";
-import {
-  doc,
-  increment,
-  runTransaction,
-} from "firebase/firestore";
 import { db } from "./firebase";
+import { doc, increment, runTransaction } from '@/lib/firebase';
 
 // Lazy initialization to avoid client-side errors
 let resend: Resend | null = null;

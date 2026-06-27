@@ -13,12 +13,7 @@ import {
   SendApplicationStatusEmailInputSchema,
 } from "./types";
 import { Resend } from "resend";
-import { db } from "@/lib/firebase";
-import {
-  doc,
-  increment,
-  runTransaction,
-} from "firebase/firestore";
+import { db, doc, increment, runTransaction } from '@/lib/firebase';
 import { requireServerRole } from "@/lib/server-auth";
 
 // Lazy initialization to avoid client-side errors

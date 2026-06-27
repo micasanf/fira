@@ -5,9 +5,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useState, useRef, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { doc, setDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
-import { updateProfile } from "firebase/auth";
+import { db,doc,setDoc,auth } from '@/lib/firebase';
 
 import { Button } from "@/components/ui/button";
 import {
@@ -81,7 +79,7 @@ export default function EmployerProfilePage() {
     }
     try {
       if (user.displayName !== values.companyName) {
-        await updateProfile(user, { displayName: values.companyName });
+        await auth.updateProfile({ displayName: values.companyName });
       }
 
       await setDoc(
@@ -156,7 +154,7 @@ export default function EmployerProfilePage() {
 
       const { url } = await response.json();
 
-      await updateProfile(user, { photoURL: url });
+      await auth.updateProfile({ photoURL: url });
       await setDoc(
         doc(db, "users", user.uid),
         { photoURL: url },

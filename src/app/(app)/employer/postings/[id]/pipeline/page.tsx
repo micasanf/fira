@@ -2,17 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  updateDoc,
-  doc,
-  getDoc,
-  Timestamp,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, collection, query, where, getDocs, updateDoc, doc, getDoc, Timestamp } from '@/lib/firebase';
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { createNotification } from "@/lib/notifications";

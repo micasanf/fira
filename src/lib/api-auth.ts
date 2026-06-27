@@ -83,7 +83,7 @@ export async function getUserRole(uid: string): Promise<string | null> {
   const { data } = await supabase
     .from("users")
     .select("role")
-    .eq("uid", uid)
+    .eq("id", uid)
     .single();
 
   return data?.role ?? null;

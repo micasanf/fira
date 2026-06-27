@@ -35,20 +35,7 @@ import { LumaSpin } from "@/components/ui/luma-spin";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Kanban, type CardType, type ColumnType } from "@/components/ui/kanban";
-import { db } from "@/lib/firebase";
-import {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  deleteDoc,
-  updateDoc,
-  query,
-  where,
-  onSnapshot,
-  getDoc,
-  orderBy,
-} from "firebase/firestore";
+import { db, collection, doc, getDocs, setDoc, deleteDoc, updateDoc, query, where, onSnapshot, getDoc, orderBy } from '@/lib/firebase';
 
 export default function ApplicationsPage() {
   const { user, loading: authLoading } = useAuth();
