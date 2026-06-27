@@ -1,14 +1,12 @@
-
 'use client';
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { getAuth, onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, onSnapshot } from "firebase/firestore";
-import { app, db } from '@/lib/firebase'; // Ensure you have this file
+import { supabase } from '@/lib/supabase';
+import type { User } from '@supabase/supabase-js';
 
 interface UserProfile {
-    role: string;
-    [key: string]: any;
+  role: string;
+  [key: string]: any;
 }
 
 interface AuthContextType {
@@ -25,46 +23,92 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const auth = getAuth(app);
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      if (user) {
-        // Set session cookie for middleware auth checks
-        // Firebase Hosting only forwards cookies named "__session"
-        try {
-          const token = await user.getIdToken();
-          document.cookie = `__session=${token}; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax; Secure`;
-        } catch (e) {
-          console.error("Failed to set session cookie:", e);
-        }
+    // Get initial session
+    const initAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      setUser(session?.user ?? null);
 
-        const docRef = doc(db, "users", user.uid);
-        const unsubscribeProfile = onSnapshot(docRef, (doc) => {
-            if (doc.exists()) {
-                const profileData = doc.data() as UserProfile;
-                
-                // TEMPORARY: Unlock all premium features for now
-                profileData.plan = "pro";
-
-                setRole(profileData.role);
-                setUserProfile(profileData);
-            }
-            setLoading(false);
-        });
-        return () => unsubscribeProfile();
+      if (session?.user) {
+        await fetchUserProfile(session.user.id);
       } else {
-        // Clear session cookie on logout
-        document.cookie = "__session=; path=/; max-age=0";
-        setRole(null);
-        setUserProfile(null);
         setLoading(false);
       }
-    });
+    };
 
-    return () => unsubscribeAuth();
-  }, [auth]);
+    initAuth();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        setUser(session?.user ?? null);
+
+        if (session?.user) {
+          await fetchUserProfile(session.user.id);
+        } else {
+          setRole(null);
+          setUserProfile(null);
+          setLoading(false);
+        }
+      }
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Realtime subscription for user profile changes
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel(`user-profile-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'users',
+          filter: `uid=eq.${user.id}`,
+        },
+        (payload) => {
+          const profileData = payload.new as UserProfile;
+          profileData.plan = 'pro'; // TEMP: unlock all premium features
+          setRole(profileData.role);
+          setUserProfile(profileData);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
+  async function fetchUserProfile(uid: string) {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('uid', uid)
+        .single();
+
+      if (error) {
+        console.error('Error fetching user profile:', error);
+        setRole(null);
+        setUserProfile(null);
+      } else if (data) {
+        const profileData = data as UserProfile;
+        profileData.plan = 'pro'; // TEMP: unlock all premium features
+        setRole(profileData.role);
+        setUserProfile(profileData);
+      }
+    } catch (e) {
+      console.error('Failed to fetch user profile:', e);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <AuthContext.Provider value={{ user, loading, role, userProfile }}>

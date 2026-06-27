@@ -2,8 +2,7 @@
 
 import { useState, useEffect, Suspense, useMemo, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
-import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -77,265 +76,168 @@ const getGradient = (identifier: string) => {
 interface Opportunity {
   id: string;
   title: string;
+  employerId: string;
   employerName: string;
+  employerPhotoURL?: string;
   location: string;
   type: string;
-  skills: string[] | string;
-  match?: number;
+  companyOverview: string;
+  description: string;
+  rolesAndResponsibilities: string;
+  skills: string;
+  education: string;
+  experience: string;
+  preferredQualifications?: string;
+  compensationAndBenefits: string;
+  applicationInstructions: string;
+  legalStatement: string;
+  workingHours?: string;
+  travelRequirements?: string;
   [key: string]: any;
 }
 
+const ITEMS_PER_PAGE = 9;
+
 function OpportunitiesContent() {
+  const searchParams = useSearchParams();
   const { saved, toggleSave } = useSavedOpportunities();
-  const { userProfile } = useAuth();
+  const { user } = useAuth();
+
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [loading, setLoading] = useState(true);
-  const searchParams = useSearchParams();
-
-  const [allSkills, setAllSkills] = useState<string[]>([]);
-  const [allLocations, setAllLocations] = useState<string[]>([]);
-  const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
-  const [locationFilter, setLocationFilter] = useState("");
-  const [typeFilter, setTypeFilter] = useState("");
-  const [sortBy, setSortBy] = useState<'newest' | 'relevance' | 'az' | 'za'>('newest');
-
-  // Pagination state
+  const [searchQuery, setSearchQuery] = useState(searchParams.get("search") || "");
+  const [typeFilter, setTypeFilter] = useState(searchParams.get("type") || "all");
+  const [locationFilter, setLocationFilter] = useState(searchParams.get("location") || "all");
+  const [sortBy, setSortBy] = useState("newest");
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(15);
+  const [locations, setLocations] = useState<string[]>([]);
 
+  // Fetch opportunities from Supabase
   useEffect(() => {
     const fetchOpportunities = async () => {
+      setLoading(true);
       try {
-        const q = query(
-          collection(db, "opportunities"),
-          where("status", "==", "Active"),
-          orderBy("createdAt", "desc")
-        );
-        const querySnapshot = await getDocs(q);
-        const opportunitiesData = querySnapshot.docs.map(
-          (doc) =>
-            ({
-              id: doc.id,
-              ...doc.data(),
-            } as Opportunity)
-        );
+        let query = supabase
+          .from("opportunities")
+          .select("*")
+          .eq("is_active", true);
 
-        setOpportunities(opportunitiesData);
+        const { data, error } = await query;
 
-        // Extract all unique skills for filter and count their frequency
-        const skillsMap = new Map<string, number>();
-        const locationsMap = new Map<string, number>();
+        if (error) {
+          console.error("Error fetching opportunities:", error);
+          setOpportunities([]);
+        } else if (data) {
+          // Map snake_case to camelCase for component compatibility
+          const mapped: Opportunity[] = data.map((opp: any) => ({
+            id: opp.id,
+            title: opp.title,
+            employerId: opp.employer_id,
+            employerName: opp.company || opp.employer_id,
+            employerPhotoURL: opp.company_logo,
+            location: opp.location,
+            type: opp.type,
+            companyOverview: opp.description,
+            description: opp.description,
+            rolesAndResponsibilities: "",
+            skills: Array.isArray(opp.skills) ? opp.skills.join(", ") : (opp.skills || ""),
+            education: "",
+            experience: opp.experience_level || "",
+            preferredQualifications: "",
+            compensationAndBenefits: Array.isArray(opp.benefits) ? opp.benefits.join(", ") : "",
+            applicationInstructions: "",
+            legalStatement: "",
+            workingHours: "",
+            travelRequirements: "",
+            status: opp.is_active ? "Active" : "Closed",
+            applicants: opp.applications_count || 0,
+            createdAt: opp.created_at,
+            category: opp.category,
+          }));
 
-        opportunitiesData.forEach((opp) => {
-          // Process skills
-          const skillsArray =
-            typeof opp.skills === "string"
-              ? opp.skills.split(",")
-              : opp.skills || [];
-          skillsArray.forEach((skill) => {
-            const trimmedSkill = skill.trim();
-            if (trimmedSkill) {
-              skillsMap.set(
-                trimmedSkill,
-                (skillsMap.get(trimmedSkill) || 0) + 1
-              );
-            }
-          });
+          setOpportunities(mapped);
 
-          // Process locations
-          if (opp.location) {
-            const trimmedLocation = opp.location.trim();
-            if (trimmedLocation) {
-              locationsMap.set(
-                trimmedLocation,
-                (locationsMap.get(trimmedLocation) || 0) + 1
-              );
-            }
-          }
-        });
-
-        // Sort skills by frequency (most popular first) and then alphabetically
-        const sortedSkills = Array.from(skillsMap.entries())
-          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-          .map(([skill]) => skill);
-        setAllSkills(sortedSkills);
-
-        // Sort locations by frequency (most popular first) and then alphabetically
-        const sortedLocations = Array.from(locationsMap.entries())
-          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-          .map(([location]) => location);
-        setAllLocations(sortedLocations);
+          // Extract unique locations
+          const uniqueLocations = Array.from(
+            new Set(mapped.map((opp) => opp.location).filter(Boolean))
+          ).sort() as string[];
+          setLocations(uniqueLocations);
+        }
       } catch (error) {
         console.error("Error fetching opportunities:", error);
       } finally {
         setLoading(false);
       }
     };
+
     fetchOpportunities();
   }, []);
 
-  const calculateMatch = (opportunity: Opportunity) => {
-    if (!userProfile?.skills) return 0;
-    const userSkills: Set<string> = new Set(
-      (userProfile.skills || "")
-        .split(",")
-        .map((s: string) => s.trim().toLowerCase())
-    );
-    const requiredSkills: Set<string> = new Set(
-      typeof opportunity.skills === "string"
-        ? opportunity.skills
-            .split(",")
-            .map((s: string) => s.trim().toLowerCase())
-        : (opportunity.skills || []).map(
-            (s: unknown) => String(s).toLowerCase() as string
-          )
-    );
-    if (requiredSkills.size === 0) return 0;
-
-    const commonSkills = [...userSkills].filter((skill) =>
-      requiredSkills.has(skill)
-    );
-    return Math.round((commonSkills.length / requiredSkills.size) * 100);
-  };
-
-  // Helper function to check if a skill matches the search query
-  const isSkillMatchingSearch = (skill: string, searchQuery: string) => {
-    if (!searchQuery) return false;
-    return skill.toLowerCase().includes(searchQuery.toLowerCase());
-  };
-
-  // Helper function to check if location matches the search query
-  const isLocationMatchingSearch = (location: string, searchQuery: string) => {
-    if (!searchQuery) return false;
-    return location.toLowerCase().includes(searchQuery.toLowerCase());
-  };
-
+  // Filter and sort opportunities
   const filteredOpportunities = useMemo(() => {
-    const searchQuery = searchParams.get("q")?.toLowerCase();
+    let filtered = [...opportunities];
 
-    let filtered = opportunities;
-
+    // Search filter
     if (searchQuery) {
-      filtered = filtered.filter((opp) => {
-        // Search in title and employer name
-        const titleMatch = opp.title.toLowerCase().includes(searchQuery);
-        const employerMatch =
-          opp.employerName &&
-          opp.employerName.toLowerCase().includes(searchQuery);
-
-        // Search in skills
-        const oppSkills =
-          typeof opp.skills === "string"
-            ? opp.skills.split(",").map((s) => s.trim().toLowerCase())
-            : (opp.skills || []).map((s) => String(s).toLowerCase());
-        const skillMatch = oppSkills.some((skill) =>
-          skill.includes(searchQuery)
-        );
-
-        // Search in location
-        const locationMatch =
-          opp.location && opp.location.toLowerCase().includes(searchQuery);
-
-        // Search in job description if available
-        const descriptionMatch =
-          opp.description &&
-          opp.description.toLowerCase().includes(searchQuery);
-
-        return (
-          titleMatch ||
-          employerMatch ||
-          skillMatch ||
-          locationMatch ||
-          descriptionMatch
-        );
-      });
-    }
-
-    if (locationFilter) {
-      filtered = filtered.filter((opp) =>
-        opp.location.toLowerCase().includes(locationFilter.toLowerCase())
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(
+        (opp) =>
+          opp.title.toLowerCase().includes(query) ||
+          opp.employerName.toLowerCase().includes(query) ||
+          opp.skills.toLowerCase().includes(query) ||
+          opp.location.toLowerCase().includes(query)
       );
     }
 
-    if (typeFilter) {
-      filtered = filtered.filter((opp) => opp.type === typeFilter);
+    // Type filter
+    if (typeFilter !== "all") {
+      filtered = filtered.filter((opp) =>
+        opp.type.toLowerCase() === typeFilter.toLowerCase()
+      );
     }
 
-    if (selectedSkills.size > 0) {
-      filtered = filtered.filter((opp) => {
-        const oppSkills = new Set(
-          typeof opp.skills === "string"
-            ? opp.skills.split(",").map((s) => s.trim())
-            : opp.skills || []
-        );
-        return [...selectedSkills].every((s) => oppSkills.has(s));
-      });
+    // Location filter
+    if (locationFilter !== "all") {
+      filtered = filtered.filter((opp) => opp.location === locationFilter);
     }
 
-    // Apply sorting
-    const sorted = [...filtered];
+    // Sort
     switch (sortBy) {
-      case 'newest':
-        sorted.sort((a, b) => {
-          const dateA = a.createdAt?.toDate?.() || a.createdAt || 0;
-          const dateB = b.createdAt?.toDate?.() || b.createdAt || 0;
-          return new Date(dateB).getTime() - new Date(dateA).getTime();
-        });
+      case "newest":
+        filtered.sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
         break;
-      case 'relevance':
-        sorted.sort((a, b) => calculateMatch(b) - calculateMatch(a));
+      case "oldest":
+        filtered.sort(
+          (a, b) =>
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
         break;
-      case 'az':
-        sorted.sort((a, b) => a.title.localeCompare(b.title));
-        break;
-      case 'za':
-        sorted.sort((a, b) => b.title.localeCompare(a.title));
+      case "applicants":
+        filtered.sort((a, b) => (b.applicants || 0) - (a.applicants || 0));
         break;
     }
 
-    return sorted;
-  }, [searchParams, opportunities, locationFilter, typeFilter, selectedSkills, sortBy, userProfile]);
+    return filtered;
+  }, [opportunities, searchQuery, typeFilter, locationFilter, sortBy]);
 
-  // Calculate pagination
-  const totalPages = Math.ceil(filteredOpportunities.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = startIndex + itemsPerPage;
+  // Pagination
+  const totalPages = Math.ceil(filteredOpportunities.length / ITEMS_PER_PAGE);
   const paginatedOpportunities = filteredOpportunities.slice(
-    startIndex,
-    endIndex
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
   );
 
-  // Reset to first page when filters change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchParams, locationFilter, typeFilter, selectedSkills]);
+  const getInitials = (name: string) =>
+    name
+      ? name
+          .split(" ")
+          .map((n) => n[0])
+          .join("")
+      : "";
 
-  // Scroll to top when page changes
-  useEffect(() => {
-    if (currentPage > 1) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  }, [currentPage]);
-
-  // Keyboard navigation for pagination
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        if (e.key === "ArrowLeft" && currentPage > 1) {
-          e.preventDefault();
-          setCurrentPage((prev) => prev - 1);
-        } else if (e.key === "ArrowRight" && currentPage < totalPages) {
-          e.preventDefault();
-          setCurrentPage((prev) => prev + 1);
-        }
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentPage, totalPages]);
-
-  // Show loading spinner while data is being fetched
   if (loading) {
     return (
       <div className="flex h-full w-full items-center justify-center min-h-[60vh]">
@@ -347,564 +249,221 @@ function OpportunitiesContent() {
   return (
     <div className="container mx-auto">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight">
-          Browse Opportunities
-        </h1>
+        <h1 className="text-3xl font-bold tracking-tight">Opportunities</h1>
         <p className="text-muted-foreground">
-          Find your next great opportunity.
+          Browse and apply for job opportunities.
         </p>
-
-        {!searchParams.get("q") &&
-          (allSkills.length > 0 || allLocations.length > 0) && (
-            <div className="mt-4 space-y-3">
-              {allSkills.length > 0 && (
-                <div>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Popular skills (click to search):
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {allSkills.slice(0, 8).map((skill) => {
-                      const jobCount = opportunities.filter((opp) => {
-                        const skillsArray =
-                          typeof opp.skills === "string"
-                            ? opp.skills.split(",").map((s) => s.trim())
-                            : opp.skills || [];
-                        return skillsArray.includes(skill);
-                      }).length;
-
-                      return (
-                        <Badge
-                          key={skill}
-                          variant="secondary"
-                          className="cursor-pointer hover:bg-primary hover:text-primary-foreground transition-colors"
-                          title={`${jobCount} job${
-                            jobCount !== 1 ? "s" : ""
-                          } require this skill`}
-                          onClick={() => {
-                            const url = new URL(window.location.href);
-                            url.searchParams.set("q", skill);
-                            window.history.pushState({}, "", url.toString());
-                            window.location.reload();
-                          }}
-                        >
-                          {skill} ({jobCount})
-                        </Badge>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {allLocations.length > 0 && (
-                <div>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Popular locations (click to search):
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {allLocations.slice(0, 6).map((location) => {
-                      const jobCount = opportunities.filter(
-                        (opp) => opp.location === location
-                      ).length;
-
-                      return (
-                        <Badge
-                          key={location}
-                          variant="outline"
-                          className="cursor-pointer hover:bg-secondary hover:text-secondary-foreground transition-colors flex items-center gap-1"
-                          title={`${jobCount} job${
-                            jobCount !== 1 ? "s" : ""
-                          } in this location`}
-                          onClick={() => {
-                            const url = new URL(window.location.href);
-                            url.searchParams.set("q", location);
-                            window.history.pushState({}, "", url.toString());
-                            window.location.reload();
-                          }}
-                        >
-                          <MapPin className="h-3 w-3" />
-                          {location} ({jobCount})
-                        </Badge>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
       </div>
 
-      <Card className="mb-6 rounded-3xl">
-        <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <SlidersHorizontal className="h-5 w-5" />
-            Filter Opportunities
-          </CardTitle>
-          {searchParams.get("q") && (
-            <CardDescription className="flex items-center justify-between">
-              <span>
-                Searching for "{searchParams.get("q")}" in job titles,
-                companies, skills, locations, and descriptions.
-                {(filteredOpportunities.some((opp) => {
-                  const skillsArray =
-                    typeof opp.skills === "string"
-                      ? opp.skills.split(",").map((s) => s.trim())
-                      : opp.skills || [];
-                  return skillsArray.some((skill) =>
-                    isSkillMatchingSearch(skill, searchParams.get("q")!)
-                  );
-                }) ||
-                  filteredOpportunities.some((opp) =>
-                    isLocationMatchingSearch(
-                      opp.location,
-                      searchParams.get("q")!
-                    )
-                  )) &&
-                  " Matching skills and locations are highlighted below."}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const url = new URL(window.location.href);
-                  url.searchParams.delete("q");
-                  window.history.pushState({}, "", url.toString());
-                  window.location.reload();
-                }}
-                className="ml-2"
-              >
-                Clear search
-              </Button>
-            </CardDescription>
-          )}
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Input
-              placeholder="Filter by location..."
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
-            />
-            <Select value={typeFilter} onValueChange={setTypeFilter}>
-              <SelectTrigger className="rounded-full">
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent className="rounded-3xl">
-                <SelectItem className="rounded-full" value="Internship">Internship</SelectItem>
-                <SelectItem className="rounded-full" value="Volunteer">Volunteer</SelectItem>
-                <SelectItem className="rounded-full" value="Full-time">Full-time</SelectItem>
-                <SelectItem className="rounded-full" value="Part-time">Part-time</SelectItem>
-                <SelectItem className="rounded-full" value="Contract">Contract</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
-              <SelectTrigger className="rounded-full">
-                <ArrowUpDown className="h-4 w-4 mr-2" />
-                <SelectValue placeholder="Sort by" />
-              </SelectTrigger>
-              <SelectContent className="rounded-3xl">
-                <SelectItem className="rounded-full" value="newest">Newest First</SelectItem>
-                <SelectItem className="rounded-full" value="relevance">Best Match</SelectItem>
-                <SelectItem className="rounded-full" value="az">A → Z</SelectItem>
-                <SelectItem className="rounded-full" value="za">Z → A</SelectItem>
-              </SelectContent>
-            </Select>
-            <Popover>
-              <PopoverTrigger asChild className="rounded-full">
-                <Button variant="outline" className="justify-start">
-                  Filter by skills...
-                  {selectedSkills.size > 0 && (
-                    <Badge variant="secondary" className="ml-auto">
-                      {selectedSkills.size} selected
-                    </Badge>
-                  )}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-64 p-0" align="start">
-                <Command>
-                  <CommandInput placeholder="Filter skills..." />
-                  <CommandList>
-                    <CommandEmpty>No results found.</CommandEmpty>
-                    <CommandGroup>
-                      {allSkills.map((skill) => {
-                        const isSelected = selectedSkills.has(skill);
-                        return (
-                          <CommandItem
-                            key={skill}
-                            onSelect={() => {
-                              setSelectedSkills((prev) => {
-                                const newSet = new Set(prev);
-                                if (isSelected) {
-                                  newSet.delete(skill);
-                                } else {
-                                  newSet.add(skill);
-                                }
-                                return newSet;
-                              });
-                            }}
-                          >
-                            <div
-                              className={cn(
-                                "mr-2 flex h-4 w-4 items-center justify-center rounded-sm border border-primary",
-                                isSelected
-                                  ? "bg-primary text-primary-foreground"
-                                  : "opacity-50 [&_svg]:invisible"
-                              )}
-                            >
-                              <Check className={cn("h-4 w-4")} />
-                            </div>
-                            <span>{skill}</span>
-                          </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                    {selectedSkills.size > 0 && (
-                      <>
-                        <CommandSeparator />
-                        <CommandGroup>
-                          <CommandItem
-                            onSelect={() => setSelectedSkills(new Set())}
-                            className="justify-center text-center"
-                          >
-                            Clear filters
-                          </CommandItem>
-                        </CommandGroup>
-                      </>
-                    )}
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-            <Button
-              className="rounded-full"
-              variant="outline"
-              onClick={() => {
-                setLocationFilter("");
-                setTypeFilter("");
-                setSelectedSkills(new Set());
-              }}
-            >
-              Clear All Filters
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Search and Filter Bar */}
+      <div className="flex flex-col md:flex-row gap-4 mb-6">
+        <Input
+          placeholder="Search opportunities..."
+          value={searchQuery}
+          onChange={(e) => {
+            setSearchQuery(e.target.value);
+            setCurrentPage(1);
+          }}
+          className="md:w-72"
+        />
+        <Select
+          value={typeFilter}
+          onValueChange={(value) => {
+            setTypeFilter(value);
+            setCurrentPage(1);
+          }}
+        >
+          <SelectTrigger className="md:w-48">
+            <SelectValue placeholder="Job Type" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="full-time">Full-time</SelectItem>
+            <SelectItem value="part-time">Part-time</SelectItem>
+            <SelectItem value="internship">Internship</SelectItem>
+            <SelectItem value="contract">Contract</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={locationFilter}
+          onValueChange={(value) => {
+            setLocationFilter(value);
+            setCurrentPage(1);
+          }}
+        >
+          <SelectTrigger className="md:w-48">
+            <SelectValue placeholder="Location" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Locations</SelectItem>
+            {locations.map((loc) => (
+              <SelectItem key={loc} value={loc}>
+                {loc}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={sortBy} onValueChange={setSortBy}>
+          <SelectTrigger className="md:w-48">
+            <SelectValue placeholder="Sort by" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="newest">Newest</SelectItem>
+            <SelectItem value="oldest">Oldest</SelectItem>
+            <SelectItem value="applicants">Most Applicants</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
 
-      {/* Results Summary */}
-      {!loading && filteredOpportunities.length > 0 && (
-        <div className="mb-4">
-          <p className="text-sm text-muted-foreground">
-            {filteredOpportunities.length} opportunity
-            {filteredOpportunities.length !== 1 ? "ies" : "y"} found
-            {searchParams.get("q") && ` for "${searchParams.get("q")}"`}
-          </p>
-        </div>
-      )}
+      <p className="text-sm text-muted-foreground mb-4">
+        {filteredOpportunities.length} opportunities found
+      </p>
 
-      {loading ? (
-        <div className="flex justify-center items-center py-10">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        </div>
-      ) : filteredOpportunities.length === 0 ? (
-        <Card className="rounded-3xl">
+      {filteredOpportunities.length === 0 ? (
+        <Card>
           <CardContent className="pt-6">
-            <div className="text-center text-muted-foreground py-10">
-              <p>
-                No opportunities found. Please check back later or try a
-                different search or filter.
-              </p>
+            <div className="flex flex-col items-center justify-center text-center text-muted-foreground py-20">
+              <Briefcase className="h-12 w-12 mb-4" />
+              <h2 className="text-xl font-semibold">No Opportunities Found</h2>
+              <p>Try adjusting your search or filter criteria.</p>
             </div>
           </CardContent>
         </Card>
       ) : (
-        <Card className="rounded-3xl overflow-hidden">
-          {/* Table Header */}
-          <div className="hidden md:grid md:grid-cols-12 gap-4 px-6 py-4 bg-muted/50 border-b border-border text-sm font-medium text-muted-foreground">
-            <div className="col-span-4">Job Title</div>
-            <div className="col-span-3">Role</div>
-            <div className="col-span-2">Location</div>
-            <div className="col-span-1">Date</div>
-            <div className="col-span-2 text-right">Action</div>
-          </div>
-
-          {/* Table Body */}
-          <div className="divide-y divide-border">
-            {paginatedOpportunities.map((opp) => {
-              const isSaved = saved.some((savedOpp) => savedOpp.id === opp.id);
-              const matchPercentage = calculateMatch(opp);
-              const createdDate = opp.createdAt?.toDate?.() 
-                ? new Date(opp.createdAt.toDate()).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })
-                : 'Recently';
-              
-              // Parse skills for badges
-              const skillsArray = typeof opp.skills === "string"
-                ? opp.skills.split(",").slice(0, 2).map(s => s.trim())
-                : (opp.skills || []).slice(0, 2);
+        <>
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {paginatedOpportunities.map((opportunity) => {
+              const isSaved = saved.some((s) => s.id === opportunity.id);
+              const gradientClass = getGradient(opportunity.employerId || opportunity.employerName);
 
               return (
-                <div
-                  key={opp.id}
-                  className="group grid grid-cols-1 md:grid-cols-12 gap-4 px-6 py-4 hover:bg-muted/30 transition-colors items-center"
-                >
-                  {/* Job Title & Company */}
-                  <div className="md:col-span-4 flex items-center gap-3">
-                    <div className={cn(
-                      "w-10 h-10 rounded-full flex-shrink-0",
-                      getGradient(opp.id || opp.employerName)
-                    )} />
-                    <div className="min-w-0">
-                      <Link 
-                        href={`/opportunities/${opp.id}`}
-                        className="font-semibold text-foreground hover:text-primary transition-colors line-clamp-1"
+                <Card key={opportunity.id} className="flex flex-col hover:shadow-lg transition-shadow">
+                  <CardHeader>
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={cn(
+                          "w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0",
+                          gradientClass
+                        )}
                       >
-                        {opp.title}
-                      </Link>
-                      <p className="text-sm text-muted-foreground line-clamp-1">
-                        {opp.employerName}
-                      </p>
+                        {getInitials(opportunity.employerName)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <Link href={`/opportunities/${opportunity.id}`}>
+                          <CardTitle className="text-base line-clamp-2 hover:text-primary transition-colors">
+                            {opportunity.title}
+                          </CardTitle>
+                        </Link>
+                        <CardDescription className="truncate">
+                          {opportunity.employerName}
+                        </CardDescription>
+                      </div>
                     </div>
-                  </div>
-
-                  {/* Role Badges */}
-                  <div className="md:col-span-3 flex flex-wrap gap-1.5">
-                    {opp.type && (
-                      <Badge 
-                        variant="secondary" 
-                        className={cn(
-                          "text-xs rounded-full",
-                          opp.type === "Full-time" && "bg-blue-500/10 text-blue-600 border-blue-500/20",
-                          opp.type === "Part-time" && "bg-amber-500/10 text-amber-600 border-amber-500/20",
-                          opp.type === "Internship" && "bg-purple-500/10 text-purple-600 border-purple-500/20",
-                          opp.type === "Contract" && "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
-                          opp.type === "Volunteer" && "bg-pink-500/10 text-pink-600 border-pink-500/20"
+                  </CardHeader>
+                  <CardContent className="flex-1 space-y-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {opportunity.type && (
+                        <Badge variant="secondary" className="rounded-full">
+                          {opportunity.type}
+                        </Badge>
+                      )}
+                      {opportunity.location && (
+                        <span className="flex items-center text-xs text-muted-foreground">
+                          <MapPin className="h-3 w-3 mr-1" />
+                          {opportunity.location}
+                        </span>
+                      )}
+                    </div>
+                    {opportunity.skills && (
+                      <div className="flex flex-wrap gap-1">
+                        {opportunity.skills
+                          .split(",")
+                          .slice(0, 3)
+                          .map((skill, i) => (
+                            <Badge
+                              key={i}
+                              variant="outline"
+                              className="text-xs rounded-full"
+                            >
+                              {skill.trim()}
+                            </Badge>
+                          ))}
+                        {opportunity.skills.split(",").length > 3 && (
+                          <Badge variant="outline" className="text-xs rounded-full">
+                            +{opportunity.skills.split(",").length - 3}
+                          </Badge>
                         )}
-                      >
-                        {opp.type}
-                      </Badge>
+                      </div>
                     )}
-                    {opp.experience && (
-                      <Badge variant="outline" className="text-xs rounded-full">
-                        {opp.experience}
-                      </Badge>
-                    )}
-                    {opp.workMode && (
-                      <Badge 
-                        variant="outline" 
-                        className={cn(
-                          "text-xs rounded-full",
-                          opp.workMode === "Remote" && "bg-green-500/10 text-green-600 border-green-500/20",
-                          opp.workMode === "Hybrid" && "bg-orange-500/10 text-orange-600 border-orange-500/20"
-                        )}
-                      >
-                        {opp.workMode}
-                      </Badge>
-                    )}
-                    {matchPercentage > 0 && (
-                      <Badge className="text-xs rounded-full bg-primary/10 text-primary border-primary/20">
-                        {matchPercentage}% Match
-                      </Badge>
-                    )}
-                  </div>
-
-                  {/* Location */}
-                  <div className="md:col-span-2 flex items-center gap-1.5 text-sm text-muted-foreground">
-                    <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span className="line-clamp-1">{opp.location || 'Remote'}</span>
-                  </div>
-
-                  {/* Date */}
-                  <div className="md:col-span-1 text-sm text-muted-foreground">
-                    {createdDate}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="md:col-span-2 flex items-center justify-end gap-2">
+                  </CardContent>
+                  <CardFooter className="gap-2">
+                    <Button asChild className="flex-1 rounded-full" size="sm">
+                      <Link href={`/opportunities/${opportunity.id}`}>View Details</Link>
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
-                      className={cn(
-                        "rounded-full h-8 w-8 p-0",
-                        isSaved && "bg-red-500/10 border-red-500/20 text-red-500"
-                      )}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        toggleSave(opp);
-                      }}
+                      className="rounded-full"
+                      onClick={() => toggleSave(opportunity)}
                     >
-                      <Heart className={cn("h-4 w-4", isSaved && "fill-current")} />
+                      <Heart
+                        className={cn(
+                          "h-4 w-4",
+                          isSaved && "fill-primary text-primary"
+                        )}
+                      />
                     </Button>
-                    <Button
-                      asChild
-                      size="sm"
-                      className="rounded-full bg-primary hover:bg-primary/90"
-                    >
-                      <Link href={`/opportunities/${opp.id}`}>
-                        Apply Now
-                      </Link>
-                    </Button>
-                  </div>
-                </div>
+                  </CardFooter>
+                </Card>
               );
             })}
           </div>
-        </Card>
-      )}
 
-      {/* Pagination Controls */}
-      {filteredOpportunities.length > itemsPerPage && (
-        <div className="mt-8 flex flex-col sm:flex-row items-center justify-between space-y-4 sm:space-y-0">
-          <div className="flex items-center space-x-4">
-            <div className="text-sm text-muted-foreground">
-              Showing {startIndex + 1} to{" "}
-              {Math.min(endIndex, filteredOpportunities.length)} of{" "}
-              {filteredOpportunities.length} opportunities
-            </div>
-            <div className="flex items-center space-x-2">
-              <span className="text-sm text-muted-foreground">Show:</span>
-              <Select
-                value={itemsPerPage.toString()}
-                onValueChange={(value) => {
-                  setItemsPerPage(parseInt(value));
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="w-20 h-8">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="10">10</SelectItem>
-                  <SelectItem value="15">15</SelectItem>
-                  <SelectItem value="25">25</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 mt-8">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
               >
                 <ChevronLeft className="h-4 w-4" />
-                Previous
               </Button>
-
-              <div className="flex items-center space-x-1">
-                {/* Page numbers with ellipsis */}
-                {currentPage > 3 && totalPages > 5 && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setCurrentPage(1)}
-                      className="w-8 h-8 p-0"
-                    >
-                      1
-                    </Button>
-                    {currentPage > 4 && (
-                      <span className="text-muted-foreground">...</span>
-                    )}
-                  </>
-                )}
-
-                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                  let pageNum;
-                  if (totalPages <= 5) {
-                    pageNum = i + 1;
-                  } else if (currentPage <= 3) {
-                    pageNum = i + 1;
-                  } else if (currentPage >= totalPages - 2) {
-                    pageNum = totalPages - 4 + i;
-                  } else {
-                    pageNum = currentPage - 2 + i;
-                  }
-
-                  return (
-                    <Button
-                      key={pageNum}
-                      variant={currentPage === pageNum ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCurrentPage(pageNum)}
-                      className="w-8 h-8 p-0"
-                    >
-                      {pageNum}
-                    </Button>
-                  );
-                })}
-
-                {currentPage < totalPages - 2 && totalPages > 5 && (
-                  <>
-                    {currentPage < totalPages - 3 && (
-                      <span className="text-muted-foreground">...</span>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setCurrentPage(totalPages)}
-                      className="w-8 h-8 p-0"
-                    >
-                      {totalPages}
-                    </Button>
-                  </>
-                )}
-              </div>
-
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                <Button
+                  key={page}
+                  variant={currentPage === page ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setCurrentPage(page)}
+                >
+                  {page}
+                </Button>
+              ))}
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() =>
-                  setCurrentPage((prev) => Math.min(prev + 1, totalPages))
-                }
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
               >
-                Next
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
-
-            {totalPages > 10 && (
-              <div className="flex items-center space-x-2">
-                <span className="text-sm text-muted-foreground">Go to:</span>
-                <Input
-                  type="number"
-                  min="1"
-                  max={totalPages}
-                  value={currentPage}
-                  onChange={(e) => {
-                    const page = parseInt(e.target.value);
-                    if (page >= 1 && page <= totalPages) {
-                      setCurrentPage(page);
-                    }
-                  }}
-                  className="w-16 h-8"
-                />
-                <span className="text-sm text-muted-foreground">
-                  of {totalPages}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Keyboard navigation hint */}
-          {totalPages > 1 && (
-            <div className="text-xs text-muted-foreground mt-2 sm:mt-0">
-              Use Ctrl/Cmd + ← → for quick navigation
-            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );
 }
 
+import { Briefcase } from "lucide-react";
+
 export default function OpportunitiesPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex justify-center items-center py-10">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <div className="flex h-full w-full items-center justify-center min-h-[60vh]">
+          <LumaSpin />
         </div>
       }
     >

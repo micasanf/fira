@@ -1,10 +1,11 @@
 /**
  * Session & Authentication Validation Utilities
  * Provides utilities for validating user sessions and protecting routes
+ * Migrated from Firebase Auth to Supabase Auth
  */
 
-import { auth } from "@/lib/firebase";
-import { onAuthStateChanged, User } from "firebase/auth";
+import { supabase } from "@/lib/supabase";
+import type { User } from "@supabase/supabase-js";
 
 // ===========================
 // SESSION VALIDATION
@@ -12,7 +13,6 @@ import { onAuthStateChanged, User } from "firebase/auth";
 
 /**
  * Validate that a user session is still valid
- * Firebase tokens auto-refresh, but this provides additional checks
  */
 export async function validateSession(): Promise<{
   valid: boolean;
@@ -20,22 +20,13 @@ export async function validateSession(): Promise<{
   error?: string;
 }> {
   try {
-    const user = auth.currentUser;
+    const { data: { session }, error } = await supabase.auth.getSession();
     
-    if (!user) {
+    if (error || !session?.user) {
       return { valid: false, user: null, error: "No active session" };
     }
     
-    // Force token refresh to ensure it's still valid
-    await user.getIdToken(true);
-    
-    // Check email verification if required
-    // Uncomment if you want to require email verification
-    // if (!user.emailVerified) {
-    //   return { valid: false, user, error: "Email not verified" };
-    // }
-    
-    return { valid: true, user };
+    return { valid: true, user: session.user };
   } catch (error: any) {
     console.error("Session validation failed:", error);
     return { 
@@ -47,14 +38,14 @@ export async function validateSession(): Promise<{
 }
 
 /**
- * Get current user's ID token for API requests
+ * Get current user's access token for API requests
  */
 export async function getAuthToken(): Promise<string | null> {
   try {
-    const user = auth.currentUser;
-    if (!user) return null;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return null;
     
-    return await user.getIdToken();
+    return session.access_token;
   } catch {
     return null;
   }
@@ -66,11 +57,13 @@ export async function getAuthToken(): Promise<string | null> {
  */
 export async function getSessionTimeRemaining(): Promise<number> {
   try {
-    const user = auth.currentUser;
-    if (!user) return 0;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return 0;
     
-    const tokenResult = await user.getIdTokenResult();
-    const expirationTime = new Date(tokenResult.expirationTime).getTime();
+    const expiresAt = session.expires_at;
+    if (!expiresAt) return 0;
+    
+    const expirationTime = expiresAt * 1000; // Convert from seconds to ms
     const now = Date.now();
     
     return Math.max(0, Math.floor((expirationTime - now) / 1000 / 60));
@@ -87,22 +80,20 @@ export function monitorSession(
   onSessionChange: (user: User | null) => void,
   onSessionExpired?: () => void
 ): () => void {
-  const unsubscribe = onAuthStateChanged(auth, async (user) => {
-    if (user) {
-      // Validate the session
-      const { valid } = await validateSession();
-      if (valid) {
-        onSessionChange(user);
+  const { data: { subscription } } = supabase.auth.onAuthStateChange(
+    async (event, session) => {
+      if (session?.user) {
+        onSessionChange(session.user);
       } else {
         onSessionChange(null);
-        onSessionExpired?.();
+        if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED' && !session) {
+          onSessionExpired?.();
+        }
       }
-    } else {
-      onSessionChange(null);
     }
-  });
+  );
   
-  return unsubscribe;
+  return () => subscription.unsubscribe();
 }
 
 // ===========================

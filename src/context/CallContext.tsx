@@ -3,8 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { listenForIncomingCalls, CallData } from "@/lib/webrtc-service";
-import { doc, updateDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 
 interface IncomingCall {
   callId: string;
@@ -77,9 +76,9 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
 
   // Listen for incoming calls
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.id) return;
 
-    const unsubscribe = listenForIncomingCalls(user.uid, (callDataWithId) => {
+    const unsubscribe = listenForIncomingCalls(user.id, (callDataWithId) => {
       
       // Don't show incoming call if already in a call
       if (isInCall) return;
@@ -97,7 +96,7 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
       stopRingtone();
       unsubscribe();
     };
-  }, [user?.uid, isInCall, startRingtone, stopRingtone]);
+  }, [user?.id, isInCall, startRingtone, stopRingtone]);
 
   // Accept the incoming call
   const acceptCall = useCallback(async () => {
@@ -108,10 +107,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     // Mark as in call BEFORE navigating to prevent listener from firing again
     setIsInCall(true);
     
-    // Update call status in Firestore to "answering" BEFORE navigation
-    // This prevents the listener on the video page from showing the modal
-    const callRef = doc(db, "calls", incomingCall.callId);
-    await updateDoc(callRef, { status: "answering" });
+    // Update call status in Supabase to "answering" BEFORE navigation
+    const { error } = await supabase
+      .from("calls")
+      .update({ status: "answering" })
+      .eq("id", incomingCall.callId);
+    
+    if (error) {
+      console.error("Error updating call status:", error);
+    }
     
     // Navigate to video call page
     const { callId, callData } = incomingCall;
@@ -134,9 +138,15 @@ export function CallProvider({ children }: { children: React.ReactNode }) {
     
     stopRingtone();
     
-    // Update call status in Firebase
-    const callRef = doc(db, "calls", incomingCall.callId);
-    await updateDoc(callRef, { status: "rejected" });
+    // Update call status in Supabase
+    const { error } = await supabase
+      .from("calls")
+      .update({ status: "rejected" })
+      .eq("id", incomingCall.callId);
+    
+    if (error) {
+      console.error("Error rejecting call:", error);
+    }
     
     setIncomingCall(null);
   }, [incomingCall, stopRingtone]);

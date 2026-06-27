@@ -1,5 +1,4 @@
-import { cookies } from "next/headers";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/supabase-server";
 
 export interface ServerAuthenticatedUser {
   uid: string;
@@ -9,31 +8,28 @@ export interface ServerAuthenticatedUser {
   role?: string;
 }
 
-function ensureAdminServices() {
-  if (!adminAuth || !adminDb) {
-    throw new Error("Authentication service unavailable");
-  }
-}
-
 export async function getServerAuthenticatedUser(): Promise<ServerAuthenticatedUser> {
-  ensureAdminServices();
+  const supabase = await createSupabaseServerClient();
+  const adminClient = createSupabaseAdminClient();
 
-  const cookieStore = await cookies();
-  const token = cookieStore.get("__session")?.value;
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-  if (!token) {
+  if (authError || !user) {
     throw new Error("Unauthorized");
   }
 
-  const decodedToken = await adminAuth!.verifyIdToken(token);
-  const userDoc = await adminDb!.collection("users").doc(decodedToken.uid).get();
-  const profile = userDoc.exists ? (userDoc.data() as Record<string, any>) : null;
+  // Fetch profile from users table
+  const { data: profile } = await adminClient
+    .from("users")
+    .select("*")
+    .eq("uid", user.id)
+    .single();
 
   return {
-    uid: decodedToken.uid,
-    email: decodedToken.email,
-    emailVerified: decodedToken.email_verified,
-    profile,
+    uid: user.id,
+    email: user.email,
+    emailVerified: user.email_confirmed_at ? true : false,
+    profile: profile as Record<string, any> | null,
     role: profile?.role,
   };
 }
@@ -54,4 +50,3 @@ export async function requireServerRole(
 
   return user;
 }
-

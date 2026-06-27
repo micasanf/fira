@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { doc, getDoc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import {
@@ -63,22 +62,26 @@ export function FollowersModal({
       setLoading(true);
       const userData: UserData[] = [];
 
-      for (const uid of userIds) {
-        try {
-          const userDoc = await getDoc(doc(db, "publicProfiles", uid));
-          if (userDoc.exists()) {
-            const data = userDoc.data();
+      try {
+        // Batch fetch using Supabase 'in' query
+        const { data, error } = await supabase
+          .from("public_profiles")
+          .select("*")
+          .in("uid", userIds);
+
+        if (!error && data) {
+          for (const profile of data) {
             userData.push({
-              uid,
-              displayName: data.displayName || data.companyName || "Unknown User",
-              photoURL: data.photoURL,
-              headline: data.headline || (data.role === "employer" ? "Employer" : ""),
-              role: data.role || "employee",
+              uid: profile.uid,
+              displayName: profile.display_name || profile.company_name || "Unknown User",
+              photoURL: profile.photo_url,
+              headline: profile.headline || (profile.role === "employer" ? "Employer" : ""),
+              role: profile.role || "employee",
             });
           }
-        } catch (error) {
-          console.error("Error fetching user:", uid, error);
         }
+      } catch (error) {
+        console.error("Error fetching users:", error);
       }
 
       setUsers(userData);
@@ -96,19 +99,20 @@ export function FollowersModal({
     try {
       const isCurrentlyFollowing = followingIds.includes(targetUserId);
 
-      // Update current user's following list
-      await updateDoc(doc(db, "users", user.uid), {
-        following: isCurrentlyFollowing
-          ? arrayRemove(targetUserId)
-          : arrayUnion(targetUserId),
-      });
-
-      // Update target user's followers list
-      await updateDoc(doc(db, "users", targetUserId), {
-        followers: isCurrentlyFollowing
-          ? arrayRemove(user.uid)
-          : arrayUnion(user.uid),
-      });
+      if (isCurrentlyFollowing) {
+        // Unfollow - remove from followers table
+        await supabase
+          .from("followers")
+          .delete()
+          .eq("follower_id", user.id)
+          .eq("following_id", targetUserId);
+      } else {
+        // Follow - add to followers table
+        await supabase.from("followers").insert({
+          follower_id: user.id,
+          following_id: targetUserId,
+        });
+      }
 
       // Update local state
       if (isCurrentlyFollowing) {

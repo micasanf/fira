@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useRef, ReactNode } from "react"
 import { ProfileCard } from "@/components/ui/profile-card"
-import { db } from "@/lib/firebase"
-import { doc, getDoc } from "firebase/firestore"
+import { supabase } from "@/lib/supabase"
 
 interface UserProfile {
   displayName?: string
@@ -45,9 +44,22 @@ export function HoverProfileCard({
       setLoading(true)
       const fetchProfile = async () => {
         try {
-          const userDoc = await getDoc(doc(db, "publicProfiles", userId))
-          if (userDoc.exists()) {
-            setProfile(userDoc.data() as UserProfile)
+          const { data, error } = await supabase
+            .from("public_profiles")
+            .select("*")
+            .eq("uid", userId)
+            .single()
+
+          if (!error && data) {
+            setProfile({
+              displayName: data.display_name || data.company_name,
+              photoURL: data.photo_url,
+              headline: data.headline,
+              location: data.location,
+              role: data.role,
+              skills: Array.isArray(data.skills) ? data.skills.join(", ") : data.skills,
+              company: data.company_name,
+            } as UserProfile)
           }
         } catch (error) {
           console.error("Error fetching profile:", error)

@@ -12,7 +12,7 @@ export default function ProfileRedirect() {
   useEffect(() => {
     if (!loading) {
       if (user) {
-        router.replace(`/users/${user.uid}`);
+        router.replace(`/users/${user.id}`);
       } else {
         router.replace("/login");
       }

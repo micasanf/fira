@@ -1,19 +1,6 @@
 "use client";
 
-import { db } from "@/lib/firebase";
-import {
-  doc,
-  setDoc,
-  onSnapshot,
-  updateDoc,
-  collection,
-  addDoc,
-  query,
-  serverTimestamp,
-  Timestamp,
-  Unsubscribe,
-  where,
-} from "firebase/firestore";
+import { supabase } from "@/lib/supabase";
 
 // ICE servers for NAT traversal
 const ICE_SERVERS: RTCConfiguration = {
@@ -45,7 +32,7 @@ export interface CallData {
   status: "ringing" | "active" | "ended" | "rejected";
   offer?: RTCSessionDescriptionInit;
   answer?: RTCSessionDescriptionInit;
-  createdAt: Timestamp;
+  createdAt: string;
 }
 
 export interface CallCallbacks {
@@ -57,13 +44,13 @@ export interface CallCallbacks {
 
 /**
  * WebRTC Call Manager - handles a single video call
- * Design: Simple, linear flow with clear state management
+ * Migrated from Firebase Firestore to Supabase
  */
 export class WebRTCCall {
   private pc: RTCPeerConnection | null = null;
   private localStream: MediaStream | null = null;
   private remoteStream: MediaStream | null = null;
-  private unsubscribers: Unsubscribe[] = [];
+  private unsubscribers: (() => void)[] = [];
   private isCleanedUp = false;
 
   constructor(
@@ -102,17 +89,16 @@ export class WebRTCCall {
       this.callbacks.onRemoteStream(this.remoteStream!);
     };
 
-    // Handle ICE candidates - save to Firestore
+    // Handle ICE candidates - save to Supabase
     this.pc.onicecandidate = async (event) => {
       if (event.candidate && !this.isCleanedUp) {
-        const candidateCollection = this.isCaller ? "callerCandidates" : "calleeCandidates";
-        await addDoc(collection(db, "calls", this.callId, candidateCollection), {
-          ...event.candidate.toJSON(),
+        const table = this.isCaller ? "caller_ice_candidates" : "callee_ice_candidates";
+        await supabase.from(table).insert({
+          call_id: this.callId,
+          candidate: JSON.stringify(event.candidate.toJSON()),
         });
       }
     };
-
-
 
     // Handle connection state changes
     this.pc.onconnectionstatechange = () => {
@@ -150,49 +136,68 @@ export class WebRTCCall {
     const offer = await this.pc!.createOffer();
     await this.pc!.setLocalDescription(offer);
 
-    // Save call to Firestore with status "ringing"
-    const callDoc = doc(db, "calls", this.callId);
-    await setDoc(callDoc, {
-      callerId: this.userId,
-      callerName,
-      calleeId,
-      calleeName,
-      opportunityId: opportunityId || null,
-      opportunityTitle: opportunityTitle || null,
+    // Save call to Supabase with status "ringing"
+    await supabase.from("calls").insert({
+      id: this.callId,
+      caller_id: this.userId,
+      caller_name: callerName,
+      callee_id: calleeId,
+      callee_name: calleeName,
+      opportunity_id: opportunityId || null,
+      opportunity_title: opportunityTitle || null,
       status: "ringing",
       offer: { type: offer.type, sdp: offer.sdp },
-      createdAt: serverTimestamp(),
+      started_at: new Date().toISOString(),
     });
 
-    // Listen for answer
-    const unsubAnswer = onSnapshot(callDoc, async (snapshot) => {
-      const data = snapshot.data() as CallData | undefined;
-      if (data?.answer && this.pc && !this.pc.currentRemoteDescription) {
-        await this.pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      }
-      if (data?.status === "ended" || data?.status === "rejected") {
-        this.callbacks.onCallEnded();
-      }
-    });
-    this.unsubscribers.push(unsubAnswer);
+    // Listen for answer via realtime
+    const callChannel = supabase
+      .channel(`call-${this.callId}-answer`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'calls',
+          filter: `id=eq.${this.callId}`,
+        },
+        async (payload) => {
+          const data = payload.new as any;
+          if (data?.answer && this.pc && !this.pc.currentRemoteDescription) {
+            await this.pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          }
+          if (data?.status === "ended" || data?.status === "rejected") {
+            this.callbacks.onCallEnded();
+          }
+        }
+      )
+      .subscribe();
+    this.unsubscribers.push(() => supabase.removeChannel(callChannel));
 
-    // Listen for callee's ICE candidates
-    const unsubCandidates = onSnapshot(
-      collection(db, "calls", this.callId, "calleeCandidates"),
-      (snapshot) => {
-        snapshot.docChanges().forEach(async (change) => {
-          if (change.type === "added" && this.pc) {
-            const data = change.doc.data();
+    // Listen for callee's ICE candidates via realtime
+    const candidatesChannel = supabase
+      .channel(`call-${this.callId}-callee-candidates`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'callee_ice_candidates',
+          filter: `call_id=eq.${this.callId}`,
+        },
+        async (payload) => {
+          if (this.pc) {
             try {
-              await this.pc.addIceCandidate(new RTCIceCandidate(data));
+              const candidateData = JSON.parse(payload.new.candidate);
+              await this.pc.addIceCandidate(new RTCIceCandidate(candidateData));
             } catch (e) {
               console.error('[WebRTC] Error adding ICE candidate:', e);
             }
           }
-        });
-      }
-    );
-    this.unsubscribers.push(unsubCandidates);
+        }
+      )
+      .subscribe();
+    this.unsubscribers.push(() => supabase.removeChannel(candidatesChannel));
   }
 
   /**
@@ -202,77 +207,119 @@ export class WebRTCCall {
     if (this.isCleanedUp) return;
 
     // Get call data first
-    const callDoc = doc(db, "calls", this.callId);
     let hasAnswered = false; // Guard to prevent processing multiple times
     
     return new Promise((resolve, reject) => {
-      const unsub = onSnapshot(callDoc, async (snapshot) => {
-        // Guard: only process once
-        if (hasAnswered || this.isCleanedUp) return;
-        
-        const data = snapshot.data() as CallData | undefined;
-        
-        if (!data?.offer) {
-          return; // Wait for offer
-        }
+      // First, fetch the call data
+      const fetchAndListen = async () => {
+        const { data: callData } = await supabase
+          .from("calls")
+          .select("*")
+          .eq("id", this.callId)
+          .single();
 
-        // Set flag immediately to prevent re-entry
-        hasAnswered = true;
-
-        try {
-          // Create peer connection
-          this.createPeerConnection();
-
-          // Set remote description from offer
-          await this.pc!.setRemoteDescription(new RTCSessionDescription(data.offer));
-
-          // Create and set answer
-          const answer = await this.pc!.createAnswer();
-          await this.pc!.setLocalDescription(answer);
-
-          // Save answer to Firestore
-          await updateDoc(callDoc, {
-            answer: { type: answer.type, sdp: answer.sdp },
-            status: "active",
-          });
-
-          // Listen for caller's ICE candidates
-          const unsubCandidates = onSnapshot(
-            collection(db, "calls", this.callId, "callerCandidates"),
-            (candidateSnapshot) => {
-              candidateSnapshot.docChanges().forEach(async (change) => {
-                if (change.type === "added" && this.pc) {
-                  const candidateData = change.doc.data();
-                  try {
-                    await this.pc.addIceCandidate(new RTCIceCandidate(candidateData));
-                  } catch (e) {
-                    console.error('[WebRTC] Error adding ICE candidate:', e);
-                  }
-                }
-              });
-            }
-          );
-          this.unsubscribers.push(unsubCandidates);
-
-          // Listen for call status changes
-          const unsubStatus = onSnapshot(callDoc, (statusSnapshot) => {
-            const statusData = statusSnapshot.data() as CallData | undefined;
-            if (statusData?.status === "ended") {
-              this.callbacks.onCallEnded();
-            }
-          });
-          this.unsubscribers.push(unsubStatus);
-
-          unsub(); // Stop listening for offer
+        if (callData?.offer && !hasAnswered && !this.isCleanedUp) {
+          hasAnswered = true;
+          await this.processAnswer(callData);
           resolve();
-        } catch (error) {
-          unsub();
-          reject(error);
         }
-      });
-      
-      this.unsubscribers.push(unsub);
+      };
+
+      fetchAndListen();
+
+      // Also subscribe for updates in case the offer isn't there yet
+      const channel = supabase
+        .channel(`call-${this.callId}-offer`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'calls',
+            filter: `id=eq.${this.callId}`,
+          },
+          async (payload) => {
+            if (hasAnswered || this.isCleanedUp) return;
+            const data = payload.new as any;
+            if (!data?.offer) return;
+
+            hasAnswered = true;
+            await this.processAnswer(data);
+            supabase.removeChannel(channel);
+            resolve();
+          }
+        )
+        .subscribe();
+
+      this.unsubscribers.push(() => supabase.removeChannel(channel));
     });
+  }
+
+  private async processAnswer(callData: any): Promise<void> {
+    // Create peer connection
+    this.createPeerConnection();
+
+    // Set remote description from offer
+    await this.pc!.setRemoteDescription(new RTCSessionDescription(callData.offer));
+
+    // Create and set answer
+    const answer = await this.pc!.createAnswer();
+    await this.pc!.setLocalDescription(answer);
+
+    // Save answer to Supabase
+    await supabase
+      .from("calls")
+      .update({
+        answer: { type: answer.type, sdp: answer.sdp },
+        status: "active",
+      })
+      .eq("id", this.callId);
+
+    // Listen for caller's ICE candidates
+    const callerCandidatesChannel = supabase
+      .channel(`call-${this.callId}-caller-candidates`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'caller_ice_candidates',
+          filter: `call_id=eq.${this.callId}`,
+        },
+        async (payload) => {
+          if (this.pc) {
+            try {
+              const candidateData = JSON.parse(payload.new.candidate);
+              await this.pc.addIceCandidate(new RTCIceCandidate(candidateData));
+            } catch (e) {
+              console.error('[WebRTC] Error adding ICE candidate:', e);
+            }
+          }
+        }
+      )
+      .subscribe();
+    this.unsubscribers.push(() => supabase.removeChannel(callerCandidatesChannel));
+
+    // Listen for call status changes
+    const statusChannel = supabase
+      .channel(`call-${this.callId}-status`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'calls',
+          filter: `id=eq.${this.callId}`,
+        },
+        (payload) => {
+          const data = payload.new as any;
+          if (data?.status === "ended") {
+            this.callbacks.onCallEnded();
+          }
+        }
+      )
+      .subscribe();
+    this.unsubscribers.push(() => supabase.removeChannel(statusChannel));
   }
 
   /**
@@ -282,10 +329,12 @@ export class WebRTCCall {
     if (this.isCleanedUp) return;
     this.isCleanedUp = true;
 
-    // Update Firestore
+    // Update Supabase
     try {
-      const callDoc = doc(db, "calls", this.callId);
-      await updateDoc(callDoc, { status: "ended" });
+      await supabase
+        .from("calls")
+        .update({ status: "ended", ended_at: new Date().toISOString() })
+        .eq("id", this.callId);
     } catch (error) {
       console.error("[WebRTC] Error updating call status:", error);
     }
@@ -354,36 +403,88 @@ export function generateCallId(callerId: string, calleeId: string): string {
 export function listenForIncomingCalls(
   userId: string,
   onIncomingCall: (callData: CallData & { callId: string }) => void
-): Unsubscribe {
+): () => void {
   // Track calls we've already notified about to avoid duplicates
   const notifiedCalls = new Set<string>();
 
-  const incomingCallsQuery = query(
-    collection(db, "calls"),
-    where("calleeId", "==", userId)
-  );
+  // Initial fetch for existing ringing calls
+  const fetchRingingCalls = async () => {
+    const { data, error } = await supabase
+      .from("calls")
+      .select("*")
+      .eq("callee_id", userId)
+      .eq("status", "ringing");
 
-  return onSnapshot(incomingCallsQuery, (snapshot) => {
-    
-    snapshot.docChanges().forEach((change) => {
-      const data = change.doc.data() as CallData;
-      const callId = change.doc.id;
-      
-      // Check if this is a ringing call for us that we haven't notified about
-      if (data.calleeId === userId && data.status === "ringing" && !notifiedCalls.has(callId)) {
-        // Only show modal for calls created in the last 60 seconds
-        // This prevents old calls from previous sessions from showing
-        const callCreatedAt = data.createdAt?.toDate?.() || new Date(0);
-        const ageSeconds = (Date.now() - callCreatedAt.getTime()) / 1000;
-        
-        if (ageSeconds > 60) {
-          notifiedCalls.add(callId); // Mark as notified so we don't check again
-          return;
+    if (!error && data) {
+      for (const call of data) {
+        if (!notifiedCalls.has(call.id)) {
+          const ageSeconds = call.created_at
+            ? (Date.now() - new Date(call.created_at).getTime()) / 1000
+            : 61;
+          
+          if (ageSeconds <= 60) {
+            notifiedCalls.add(call.id);
+            onIncomingCall({
+              callId: call.id,
+              callerId: call.caller_id,
+              callerName: call.caller_name,
+              calleeId: call.callee_id,
+              calleeName: call.callee_name,
+              opportunityId: call.opportunity_id,
+              opportunityTitle: call.opportunity_title,
+              status: call.status,
+              offer: call.offer,
+              createdAt: call.created_at,
+            });
+          }
         }
-        
-        notifiedCalls.add(callId);
-        onIncomingCall({ ...data, callId });
       }
-    });
-  });
+    }
+  };
+
+  fetchRingingCalls();
+
+  // Subscribe to new calls via realtime
+  const channel = supabase
+    .channel(`incoming-calls-${userId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'calls',
+        filter: `callee_id=eq.${userId}`,
+      },
+      (payload) => {
+        const data = payload.new as any;
+        const callId = data.id;
+
+        if (data.callee_id === userId && data.status === "ringing" && !notifiedCalls.has(callId)) {
+          const ageSeconds = data.created_at
+            ? (Date.now() - new Date(data.created_at).getTime()) / 1000
+            : 61;
+
+          if (ageSeconds <= 60) {
+            notifiedCalls.add(callId);
+            onIncomingCall({
+              callId: data.id,
+              callerId: data.caller_id,
+              callerName: data.caller_name,
+              calleeId: data.callee_id,
+              calleeName: data.callee_name,
+              opportunityId: data.opportunity_id,
+              opportunityTitle: data.opportunity_title,
+              status: data.status,
+              offer: data.offer,
+              createdAt: data.created_at,
+            });
+          }
+        }
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }

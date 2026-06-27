@@ -8,19 +8,7 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
-import {
-  collection,
-  query,
-  where,
-  orderBy,
-  limit,
-  onSnapshot,
-  doc,
-  updateDoc,
-  writeBatch,
-  Timestamp,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import type { AppNotification } from "@/types/notification-types";
 
@@ -49,7 +37,47 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Real-time listener for notifications
+  // Fetch notifications
+  const fetchNotifications = useCallback(async () => {
+    if (!user) {
+      setNotifications([]);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (!error && data) {
+        const items: AppNotification[] = data.map((row: any) => ({
+          id: row.id,
+          userId: row.user_id,
+          type: row.type,
+          title: row.title,
+          message: row.message,
+          read: row.is_read ?? false,
+          createdAt: row.created_at ? new Date(row.created_at) : new Date(),
+          link: row.link ?? undefined,
+          actorId: row.actor_id ?? undefined,
+          actorName: row.actor_name ?? undefined,
+          actorPhotoURL: row.actor_photo_url ?? undefined,
+          metadata: row.metadata ?? undefined,
+        }));
+        setNotifications(items);
+      }
+    } catch (error) {
+      console.error("Error fetching notifications:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  // Initial fetch + realtime subscription
   useEffect(() => {
     if (!user) {
       setNotifications([]);
@@ -57,74 +85,70 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const q = query(
-      collection(db, "notifications"),
-      where("userId", "==", user.uid),
-      orderBy("createdAt", "desc"),
-      limit(50)
-    );
+    fetchNotifications();
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const items: AppNotification[] = snapshot.docs.map((docSnap) => {
-          const data = docSnap.data();
-          return {
-            id: docSnap.id,
-            userId: data.userId,
-            type: data.type,
-            title: data.title,
-            message: data.message,
-            read: data.read ?? false,
-            createdAt:
-              data.createdAt instanceof Timestamp
-                ? data.createdAt.toDate()
-                : new Date(data.createdAt),
-            link: data.link ?? undefined,
-            actorId: data.actorId ?? undefined,
-            actorName: data.actorName ?? undefined,
-            actorPhotoURL: data.actorPhotoURL ?? undefined,
-            metadata: data.metadata ?? undefined,
-          };
-        });
-        setNotifications(items);
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Notification listener error:", error);
-        setLoading(false);
-      }
-    );
+    // Subscribe to realtime changes
+    const channel = supabase
+      .channel(`notifications-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          fetchNotifications();
+        }
+      )
+      .subscribe();
 
-    return () => unsubscribe();
-  }, [user]);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, fetchNotifications]);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   const markAsRead = useCallback(async (notificationId: string) => {
     try {
-      await updateDoc(doc(db, "notifications", notificationId), {
-        read: true,
-      });
+      const { error } = await supabase
+        .from("notifications")
+        .update({ is_read: true })
+        .eq("id", notificationId);
+      if (error) throw error;
+
+      // Optimistic update
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
+      );
     } catch (error) {
       console.error("Failed to mark notification as read:", error);
     }
   }, []);
 
   const markAllRead = useCallback(async () => {
+    if (!user) return;
     const unread = notifications.filter((n) => !n.read);
     if (unread.length === 0) return;
 
     try {
-      const batch = writeBatch(db);
-      unread.forEach((n) => {
-        batch.update(doc(db, "notifications", n.id), { read: true });
-      });
-      await batch.commit();
+      const unreadIds = unread.map((n) => n.id);
+      const { error } = await supabase
+        .from("notifications")
+        .update({ is_read: true })
+        .in("id", unreadIds);
+      if (error) throw error;
+
+      // Optimistic update
+      setNotifications((prev) =>
+        prev.map((n) => ({ ...n, read: true }))
+      );
     } catch (error) {
       console.error("Failed to mark all as read:", error);
     }
-  }, [notifications]);
+  }, [notifications, user]);
 
   return (
     <NotificationContext.Provider

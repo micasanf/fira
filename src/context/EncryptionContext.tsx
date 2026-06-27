@@ -1,8 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
-import { doc, getDoc, updateDoc, setDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import {
   generateKeyPair,
@@ -52,7 +51,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
 
   // Initialize keys when user logs in
   useEffect(() => {
-    if (!user?.uid || !isSupported) {
+    if (!user?.id || !isSupported) {
       setIsReady(false);
       setPublicKey(null);
       setPrivateKey(null);
@@ -62,7 +61,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
     const initializeKeys = async () => {
       try {
         // Check if we have keys in IndexedDB
-        const storedKeys = await getKeys(user.uid);
+        const storedKeys = await getKeys(user.id);
         
         if (storedKeys) {
           // Import existing keys
@@ -71,11 +70,14 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
           setPublicKey(storedKeys.publicKey);
           setIsReady(true);
         } else {
-          // Check if there's a public key in Firestore but we lost the private key
-          const userDoc = await getDoc(doc(db, "users", user.uid));
-          const userData = userDoc.data();
+          // Check if there's a public key in Supabase but we lost the private key
+          const { data: userData } = await supabase
+            .from("users")
+            .select("encryption_public_key")
+            .eq("uid", user.id)
+            .single();
           
-          if (userData?.encryptionPublicKey) {
+          if (userData?.encryption_public_key) {
             // We have a public key but no private key - need to regenerate
             console.warn("Private key lost, needs regeneration");
             setIsReady(false);
@@ -91,11 +93,11 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
     };
 
     initializeKeys();
-  }, [user?.uid, isSupported]);
+  }, [user?.id, isSupported]);
 
   // Ensure keys exist (generate if needed)
   const ensureKeys = useCallback(async (): Promise<boolean> => {
-    if (!user?.uid || !isSupported) return false;
+    if (!user?.id || !isSupported) return false;
     
     if (privateKey && publicKey) return true;
 
@@ -106,25 +108,23 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
       const exportedPrivate = await exportPrivateKey(keyPair.privateKey);
 
       // Store in IndexedDB
-      await storeKeys(user.uid, exportedPublic, exportedPrivate);
+      await storeKeys(user.id, exportedPublic, exportedPrivate);
 
-      // Store public key in Firestore
-      await updateDoc(doc(db, "users", user.uid), {
-        encryptionPublicKey: exportedPublic,
-      }).catch(() => {
-        // If update fails (doc doesn't exist), try setDoc with merge
-        return setDoc(doc(db, "users", user.uid), {
-          encryptionPublicKey: exportedPublic,
-        }, { merge: true });
-      });
-      await setDoc(
-        doc(db, "publicProfiles", user.uid),
-        {
-          encryptionPublicKey: exportedPublic,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
+      // Store public key in Supabase - users table
+      await supabase
+        .from("users")
+        .upsert(
+          { uid: user.id, encryption_public_key: exportedPublic },
+          { onConflict: "uid" }
+        );
+
+      // Store public key in public_profiles table
+      await supabase
+        .from("public_profiles")
+        .upsert(
+          { uid: user.id, encryption_public_key: exportedPublic, updated_at: new Date().toISOString() },
+          { onConflict: "uid" }
+        );
 
       setPrivateKey(keyPair.privateKey);
       setPublicKey(exportedPublic);
@@ -135,7 +135,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
       console.error("Error generating keys:", error);
       return false;
     }
-  }, [user?.uid, isSupported, privateKey, publicKey]);
+  }, [user?.id, isSupported, privateKey, publicKey]);
 
   // Get or derive shared key for a specific user
   const getSharedKey = useCallback(async (otherUserId: string): Promise<CryptoKey | null> => {
@@ -146,17 +146,20 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
     if (cached) return cached;
 
     try {
-      // Get other user's public key from Firestore
-      const otherUserDoc = await getDoc(doc(db, "publicProfiles", otherUserId));
-      const otherUserData = otherUserDoc.data();
+      // Get other user's public key from Supabase
+      const { data: otherUserData } = await supabase
+        .from("public_profiles")
+        .select("encryption_public_key")
+        .eq("uid", otherUserId)
+        .single();
       
-      if (!otherUserData?.encryptionPublicKey) {
+      if (!otherUserData?.encryption_public_key) {
         console.warn("Other user has no encryption key");
         return null;
       }
 
       // Import their public key and derive shared key
-      const otherPublicKey = await importPublicKey(otherUserData.encryptionPublicKey);
+      const otherPublicKey = await importPublicKey(otherUserData.encryption_public_key);
       const sharedKey = await deriveSharedKey(privateKey, otherPublicKey);
 
       // Cache it

@@ -2,14 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, Dispatch, SetStateAction } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { db } from '@/lib/firebase';
-import {
-  collection,
-  doc,
-  setDoc,
-  deleteDoc,
-  onSnapshot,
-} from 'firebase/firestore';
+import { supabase } from '@/lib/supabase';
 
 interface Opportunity {
   id: string;
@@ -30,7 +23,7 @@ export const SavedOpportunitiesProvider = ({ children }: { children: ReactNode }
   const [loading, setLoading] = useState(true);
   const { user } = useAuth();
 
-  // Load saved opportunities from Firestore
+  // Load saved opportunities from Supabase
   useEffect(() => {
     if (!user) {
       setSaved([]);
@@ -38,42 +31,76 @@ export const SavedOpportunitiesProvider = ({ children }: { children: ReactNode }
       return;
     }
 
-    const savedRef = collection(db, 'users', user.uid, 'savedOpportunities');
-    
-    const unsubscribe = onSnapshot(savedRef, (snapshot) => {
-      const opportunities: Opportunity[] = [];
-      snapshot.forEach((doc) => {
-        opportunities.push({
-          id: doc.id,
-          ...doc.data(),
-        });
-      });
-      setSaved(opportunities);
-      setLoading(false);
-    }, (error) => {
-      console.error('Error loading saved opportunities:', error);
-      setLoading(false);
-    });
+    const fetchSaved = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('saved_opportunities')
+          .select('opportunity_id, opportunities(*)')
+          .eq('user_id', user.id);
 
-    return () => unsubscribe();
+        if (!error && data) {
+          const opportunities: Opportunity[] = data
+            .filter((item: any) => item.opportunities)
+            .map((item: any) => ({
+              id: item.opportunity_id,
+              ...item.opportunities,
+            }));
+          setSaved(opportunities);
+        }
+      } catch (error) {
+        console.error('Error loading saved opportunities:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSaved();
+
+    // Subscribe to realtime changes
+    const channel = supabase
+      .channel(`saved-opportunities-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'saved_opportunities',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          fetchSaved();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
   const toggleSave = async (opportunity: Opportunity) => {
     if (!user) return;
 
     const isSaved = saved.some(item => item.id === opportunity.id);
-    const savedDocRef = doc(db, 'users', user.uid, 'savedOpportunities', opportunity.id);
 
     try {
       if (isSaved) {
         // Remove from saved
-        await deleteDoc(savedDocRef);
+        const { error } = await supabase
+          .from('saved_opportunities')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('opportunity_id', opportunity.id);
+        if (error) throw error;
       } else {
         // Add to saved
-        await setDoc(savedDocRef, {
-          ...opportunity,
-          savedAt: new Date(),
-        });
+        const { error } = await supabase
+          .from('saved_opportunities')
+          .insert({
+            user_id: user.id,
+            opportunity_id: opportunity.id,
+          });
+        if (error) throw error;
       }
     } catch (error) {
       console.error('Error toggling save:', error);

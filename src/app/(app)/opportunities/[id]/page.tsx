@@ -1,6 +1,5 @@
 
-"use client";
-
+'use client';
 'use client';
 
 import { useState, useTransition, useEffect, useRef } from 'react';
@@ -9,11 +8,6 @@ import { ComprehensiveATSScorer } from '@/lib/comprehensiveAtsScorer';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { parseResume } from '@/ai/flows/parse-resume';
-
-
-
-
-
 import { analyzeOpportunityDescription } from '@/ai/flows/analyze-opportunity-description';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -26,8 +20,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useSavedOpportunities } from '@/context/SavedOpportunitiesContext';
 import { cn } from '@/lib/utils';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/context/AuthContext';
 import { LumaSpin } from '@/components/ui/luma-spin';
@@ -62,7 +55,6 @@ type Analysis = {
 
 
 export default function OpportunityDetailPage() {
-  // ATS Score Checker hooks must be inside the component
   const [atsResumeText, setAtsResumeText] = useState('');
   const [atsResumeFile, setAtsResumeFile] = useState<File|null>(null);
   const [atsSuggestions, setAtsSuggestions] = useState<string>('');
@@ -74,10 +66,6 @@ export default function OpportunityDetailPage() {
   const [atsLoading, setAtsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-
-
-
-  // ATS Score calculation with AI resume parsing and advanced scoring
   const handleAtsScore = async () => {
     setAtsLoading(true);
     setAtsSuggestions('');
@@ -144,8 +132,6 @@ export default function OpportunityDetailPage() {
   const { user, loading: authLoading } = useAuth();
   const [hasApplied, setHasApplied] = useState(false);
 
-
-  // Compose job description from opportunity fields using state
   const [jobDesc, setJobDesc] = useState('');
   useEffect(() => {
     if (opportunity) {
@@ -166,36 +152,57 @@ export default function OpportunityDetailPage() {
     if (!id || !user) return;
 
     const checkApplicationStatus = async () => {
-        const q = query(
-            collection(db, "applications"),
-            where("userId", "==", user.uid),
-            where("opportunityId", "==", id)
-        );
-        const querySnapshot = await getDocs(q);
+      const { data, error } = await supabase
+        .from("applications")
+        .select("status")
+        .eq("applicant_id", user.id)
+        .eq("opportunity_id", id);
+
+      if (!error && data) {
         setHasApplied(
-          querySnapshot.docs.some(
-            (docSnap) => (docSnap.data().status || "").toLowerCase() !== "withdrawn"
-          )
+          data.some((app: any) => (app.status || "").toLowerCase() !== "withdrawn")
         );
-    }
+      }
+    };
 
     const fetchOpportunity = async () => {
       setLoading(true);
       try {
-        const oppDocRef = doc(db, 'opportunities', id as string);
-        const oppDocSnap = await getDoc(oppDocRef);
+        const { data, error } = await supabase
+          .from("opportunities")
+          .select("*")
+          .eq("id", id as string)
+          .single();
 
-        if (oppDocSnap.exists()) {
-           setOpportunity({
-            id: oppDocSnap.id,
-            ...oppDocSnap.data(),
-          } as Opportunity);
-
-        } else {
+        if (error || !data) {
           toast({ title: "Error", description: "Opportunity not found.", variant: "destructive" });
+        } else {
+          // Map snake_case to camelCase
+          const opp: Opportunity = {
+            id: data.id,
+            title: data.title,
+            employerId: data.employer_id,
+            employerName: data.company || data.employer_id,
+            employerPhotoURL: data.company_logo,
+            location: data.location,
+            type: data.type,
+            companyOverview: data.description,
+            description: data.description,
+            rolesAndResponsibilities: "",
+            skills: Array.isArray(data.skills) ? data.skills.join(", ") : (data.skills || ""),
+            education: "",
+            experience: data.experience_level || "",
+            preferredQualifications: "",
+            compensationAndBenefits: Array.isArray(data.benefits) ? data.benefits.join(", ") : "",
+            applicationInstructions: "",
+            legalStatement: "",
+            workingHours: "",
+            travelRequirements: "",
+          };
+          setOpportunity(opp);
         }
       } catch (error) {
-        console.error("Error fetching details:", error)
+        console.error("Error fetching details:", error);
         toast({ title: "Error", description: "Failed to fetch opportunity details.", variant: "destructive" });
       } finally {
         setLoading(false);

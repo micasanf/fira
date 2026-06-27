@@ -1,10 +1,10 @@
 /**
  * API Authentication Middleware
- * Validates Firebase ID tokens for protected API routes
+ * Validates Supabase JWT tokens for protected API routes
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { createClient } from "@supabase/supabase-js";
 
 export interface AuthenticatedUser {
   uid: string;
@@ -18,15 +18,22 @@ export interface AuthResult {
   error?: string;
 }
 
+function getSupabaseAdmin() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
+
 /**
- * Verify Firebase ID token from request headers
+ * Verify Supabase auth token from request
  */
 export async function verifyAuthToken(
   request: NextRequest
 ): Promise<AuthResult> {
   try {
     const authHeader = request.headers.get("authorization");
-    const cookieToken = request.cookies.get("__session")?.value;
+    const cookieToken = request.cookies.get("__supabase-auth-token")?.value;
 
     // Extract token from "Bearer <token>"
     const token = authHeader
@@ -42,22 +49,23 @@ export async function verifyAuthToken(
       };
     }
 
-    // Verify with Firebase Admin
-    if (!adminAuth) {
+    // Verify with Supabase Admin
+    const supabase = getSupabaseAdmin();
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
       return {
         authenticated: false,
-        error: "Authentication service unavailable",
+        error: "Invalid or expired token",
       };
     }
-
-    const decodedToken = await adminAuth.verifyIdToken(token);
 
     return {
       authenticated: true,
       user: {
-        uid: decodedToken.uid,
-        email: decodedToken.email,
-        emailVerified: decodedToken.email_verified,
+        uid: user.id,
+        email: user.email,
+        emailVerified: user.email_confirmed_at ? true : false,
       },
     };
   } catch (error: any) {
@@ -70,17 +78,15 @@ export async function verifyAuthToken(
 }
 
 export async function getUserRole(uid: string): Promise<string | null> {
-  if (!adminDb) {
-    return null;
-  }
+  const supabase = getSupabaseAdmin();
 
-  const userDoc = await adminDb.collection("users").doc(uid).get();
-  if (!userDoc.exists) {
-    return null;
-  }
+  const { data } = await supabase
+    .from("users")
+    .select("role")
+    .eq("uid", uid)
+    .single();
 
-  const userData = userDoc.data() as Record<string, any>;
-  return typeof userData.role === "string" ? userData.role : null;
+  return data?.role ?? null;
 }
 
 export async function requireRole(
@@ -106,7 +112,6 @@ export async function requireRole(
 
 /**
  * Middleware to require authentication
- * Returns error response if not authenticated, null if authenticated
  */
 export async function requireAuth(
   request: NextRequest
@@ -135,14 +140,12 @@ export function validateBody<T extends Record<string, any>>(
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
   
-  // Check required fields
   for (const field of requiredFields) {
     if (body[field] === undefined || body[field] === null || body[field] === "") {
       errors.push(`Missing required field: ${String(field)}`);
     }
   }
   
-  // Run custom validators
   if (fieldValidators) {
     for (const [field, validator] of Object.entries(fieldValidators)) {
       if (body[field] !== undefined && validator && !validator(body[field])) {

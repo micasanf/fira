@@ -5,28 +5,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import {
-  signInWithEmailAndPassword,
-  GoogleAuthProvider,
-  signInWithPopup,
-} from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
 import { useState } from "react";
 import { Eye, EyeOff, Sparkles, Mail } from "lucide-react";
 import Image from "next/image";
+import { supabase } from "@/lib/supabase";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import { sendWelcomeEmailDirect } from "@/lib/email-utils";
-import { handleFirstLogin } from "@/lib/automated-email-service";
 import { AnimatedCharacters } from "@/components/ui/animated-characters";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
-import { toPublicProfile } from "@/lib/public-profile";
-import { getAdminEmails } from "./actions";
 
 const loginSchema = z.object({
   email: z.string().email({ message: "Please enter a valid email address." }),
@@ -40,6 +30,7 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 export default function LoginPage() {
   const router = useRouter();
   const { toast } = useToast();
+
   const [showPassword, setShowPassword] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -53,47 +44,32 @@ export default function LoginPage() {
     },
   });
 
-  const email = form.watch("email");
   const password = form.watch("password");
 
   const onSubmit = async (values: LoginFormValues) => {
     setIsLoading(true);
     setError("");
     try {
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        values.email,
-        values.password,
-      );
-      const user = userCredential.user;
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: values.email,
+        password: values.password,
+      });
 
-      const userDocRef = doc(db, "users", user.uid);
-      const userDocSnap = await getDoc(userDocRef);
+      if (authError) throw authError;
 
-      // Handle first login automation
-      if (userDocSnap.exists()) {
-        const userData = userDocSnap.data();
-        await setDoc(
-          doc(db, "publicProfiles", user.uid),
-          toPublicProfile({ uid: user.uid, ...userData }),
-          { merge: true },
-        );
-        await handleFirstLogin(
-          user.uid,
-          user.email!,
-          userData.displayName || user.email!,
-        );
-      }
+      const user = data.user;
 
-      if (userDocSnap.exists()) {
-        const userData = userDocSnap.data();
-        if (userData.role === "admin") {
-          router.push("/admin");
-        } else if (userData.role === "employer") {
-          router.push("/employer/dashboard");
-        } else {
-          router.push("/dashboard");
-        }
+      // Fetch user profile to determine role
+      const { data: profile } = await supabase
+        .from("users")
+        .select("role")
+        .eq("uid", user.id)
+        .single();
+
+      if (profile?.role === "admin") {
+        router.push("/admin");
+      } else if (profile?.role === "employer") {
+        router.push("/employer/dashboard");
       } else {
         router.push("/dashboard");
       }
@@ -110,80 +86,15 @@ export default function LoginPage() {
   };
 
   const handleGoogleSignIn = async () => {
-    const provider = new GoogleAuthProvider();
     try {
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/login`,
+        },
+      });
 
-      const userDocRef = doc(db, "users", user.uid);
-      const userDocSnap = await getDoc(userDocRef);
-
-      if (!userDocSnap.exists()) {
-        // New user logic
-        const adminEmails = await getAdminEmails();
-        const isAdmin = user.email ? adminEmails.includes(user.email.toLowerCase()) : false;
-
-        const emailDomain = user.email?.split("@")[1];
-        const role = isAdmin ? "admin" : (emailDomain === "gmail.com" ? "employee" : "employer");
-
-        const nameParts = user.displayName?.split(" ") || [];
-        const firstName = nameParts[0] || "";
-        const lastName = nameParts.slice(1).join(" ") || "";
-
-        const userData = {
-          uid: user.uid,
-          displayName: user.displayName,
-          email: user.email,
-          role: role,
-          photoURL: user.photoURL,
-          firstName: firstName,
-          lastName: lastName,
-          ...(role === "employer" && { companyName: user.displayName }),
-        };
-
-        await setDoc(userDocRef, userData);
-        await setDoc(
-          doc(db, "publicProfiles", user.uid),
-          toPublicProfile(userData as any),
-          { merge: true },
-        );
-
-        const emailSent = await sendWelcomeEmailDirect(
-          user.email!,
-          user.displayName!,
-        );
-
-        // Handle first login for new Google users
-        await handleFirstLogin(user.uid, user.email!, user.displayName!);
-
-        toast({
-          title: "Account Created",
-          description: "Welcome! Your account has been set up.",
-        });
-
-        if (role === "admin") {
-          router.push("/admin");
-        } else if (role === "employer") {
-          router.push("/employer/dashboard");
-        } else {
-          router.push("/dashboard");
-        }
-      } else {
-        // Existing user logic
-        await setDoc(
-          doc(db, "publicProfiles", user.uid),
-          toPublicProfile({ uid: user.uid, ...userDocSnap.data() }),
-          { merge: true },
-        );
-        const userData = userDocSnap.data();
-        if (userData.role === "admin") {
-          router.push("/admin");
-        } else if (userData.role === "employer") {
-          router.push("/employer/dashboard");
-        } else {
-          router.push("/dashboard");
-        }
-      }
+      if (authError) throw authError;
     } catch (err: any) {
       toast({
         title: "Google Sign-In Failed",

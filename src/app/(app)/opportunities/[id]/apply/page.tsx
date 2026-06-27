@@ -5,8 +5,7 @@ import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import Link from 'next/link';
 import { useRouter, useParams } from 'next/navigation';
-import { addDoc, collection, doc, getDoc, increment, serverTimestamp, updateDoc } from "firebase/firestore"; 
-import { db } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { useEffect, useState, useTransition } from 'react';
 import { useAuth } from '@/context/AuthContext';
 
@@ -72,14 +71,20 @@ export default function ApplyPage() {
     const fetchOpportunity = async () => {
       if (!id) return;
       try {
-        const docRef = doc(db, 'opportunities', id as string);
-        const docSnap = await getDoc(docRef);
+        const { data, error } = await supabase
+          .from("opportunities")
+          .select("*")
+          .eq("id", id as string)
+          .single();
 
-        if (docSnap.exists()) {
-          setOpportunity(docSnap.data() as Opportunity);
-        } else {
+        if (error || !data) {
           toast({ title: "Error", description: "Opportunity not found.", variant: "destructive" });
           router.push('/opportunities');
+        } else {
+          setOpportunity({
+            title: data.title,
+            employerName: data.company || data.employer_id,
+          } as Opportunity);
         }
       } catch (error) {
         toast({ title: "Error", description: "Failed to fetch opportunity details.", variant: "destructive" });
@@ -100,31 +105,55 @@ export default function ApplyPage() {
     }
     
     try {
+      // Get employer_id from opportunity
+      const { data: oppData } = await supabase
+        .from("opportunities")
+        .select("employer_id")
+        .eq("id", id as string)
+        .single();
+
       const applicationData = {
-        opportunityId: id,
-        userId: user.uid,
-        userName: user.displayName || '',
-        userEmail: user.email || '',
-        photoURL: user.photoURL || '',
-        coverLetter: values.coverLetter || '',
-        employmentHistory: values.employmentHistory || userProfile.employmentHistory || '',
-        references: values.references || userProfile.references || '',
-        portfolioLink: values.portfolioLink || userProfile.portfolioLink || '',
-        linkedinLink: values.linkedinLink || userProfile.linkedinLink || '',
-        education: userProfile.education || '',
-        skills: userProfile.skills || '',
-        interests: userProfile.interests || '',
-        careerGoals: userProfile.careerGoals || '',
+        opportunity_id: id,
+        applicant_id: user.id,
+        employer_id: oppData?.employer_id || '',
         status: 'Submitted',
-        submittedAt: serverTimestamp(),
+        cover_letter: values.coverLetter || '',
+        resume_url: userProfile.resume_url || null,
+        notes: JSON.stringify({
+          employmentHistory: values.employmentHistory || userProfile.employmentHistory || '',
+          references: values.references || userProfile.references || '',
+          portfolioLink: values.portfolioLink || userProfile.portfolioLink || '',
+          linkedinLink: values.linkedinLink || userProfile.linkedinLink || '',
+          education: userProfile.education || '',
+          skills: userProfile.skills || '',
+          interests: userProfile.interests || '',
+          careerGoals: userProfile.careerGoals || '',
+        }),
+        applied_at: new Date().toISOString(),
       };
 
-      await addDoc(collection(db, "applications"), applicationData);
+      const { error } = await supabase.from("applications").insert(applicationData);
 
-      const opportunityRef = doc(db, "opportunities", id as string);
-      await updateDoc(opportunityRef, {
-        applicants: increment(1)
-      });
+      if (error) throw error;
+
+      // Update applications count on opportunity
+      try {
+        await supabase.rpc('increment_applications_count', { opp_id: id as string });
+      } catch {
+        // Fallback: manual increment
+        const { data: currentOpp } = await supabase
+          .from("opportunities")
+          .select("applications_count")
+          .eq("id", id as string)
+          .single();
+        
+        if (currentOpp) {
+          await supabase
+            .from("opportunities")
+            .update({ applications_count: (currentOpp.applications_count || 0) + 1 })
+            .eq("id", id as string);
+        }
+      }
 
       toast({
         title: 'Application Submitted',
@@ -188,7 +217,7 @@ export default function ApplyPage() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <FormItem>
                             <FormLabel>Full Name</FormLabel>
-                            <Input value={user?.displayName || ''} disabled />
+                            <Input value={userProfile?.display_name || user?.email?.split('@')[0] || ''} disabled />
                         </FormItem>
                          <FormItem>
                             <FormLabel>Email</FormLabel>

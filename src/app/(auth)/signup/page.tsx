@@ -5,24 +5,19 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
-import { doc, setDoc } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
 import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import Image from "next/image";
+import { supabase } from "@/lib/supabase";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { sendWelcomeEmailDirect } from "@/lib/email-utils";
 import { AnimatedCharacters } from "@/components/ui/animated-characters";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
-import { toPublicProfile } from "@/lib/public-profile";
 import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { getAdminEmails } from "../login/actions";
 
 const signupSchema = z.object({
   fullName: z.string().min(2, { message: "Please enter your full name." }),
@@ -59,46 +54,55 @@ export default function SignupPage() {
     setIsLoading(true);
     setError("");
     try {
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        values.email,
-        values.password,
-      );
-      const user = userCredential.user;
-
-      await updateProfile(user, {
-        displayName: values.fullName,
+      // Create auth user
+      const { data, error: authError } = await supabase.auth.signUp({
+        email: values.email,
+        password: values.password,
+        options: {
+          data: {
+            full_name: values.fullName,
+          },
+        },
       });
 
-      const adminEmails = await getAdminEmails();
-      const isAdmin = values.email ? adminEmails.includes(values.email.toLowerCase()) : false;
+      if (authError) throw authError;
+
+      const user = data.user;
+      if (!user) throw new Error("Failed to create account");
+
+      // Determine role
+      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || "admin@fira.com.ph")
+        .split(",")
+        .map((e) => e.trim().toLowerCase());
+      const isAdmin = adminEmails.includes(values.email.toLowerCase());
       const role = isAdmin ? "admin" : values.role;
 
       const nameParts = values.fullName.split(" ");
       const firstName = nameParts[0] || "";
       const lastName = nameParts.slice(1).join(" ") || "";
 
-      const userData = {
-        uid: user.uid,
-        displayName: values.fullName,
+      // Insert user profile
+      const { error: profileError } = await supabase.from("users").insert({
+        uid: user.id,
         email: values.email,
+        display_name: values.fullName,
+        first_name: firstName,
+        last_name: lastName,
         role: role,
-        firstName: firstName,
-        lastName: lastName,
-        ...(role === "employer" && { companyName: values.fullName }),
-      };
+        ...(role === "employer" && { company_name: values.fullName }),
+      });
 
-      await setDoc(doc(db, "users", user.uid), userData);
-      await setDoc(
-        doc(db, "publicProfiles", user.uid),
-        toPublicProfile(userData),
-      );
+      if (profileError) console.error("Profile insert error:", profileError);
 
-      // Send welcome email
-      const emailSent = await sendWelcomeEmailDirect(
-        values.email,
-        values.fullName,
-      );
+      // Insert public profile
+      await supabase.from("public_profiles").insert({
+        uid: user.id,
+        display_name: values.fullName,
+        first_name: firstName,
+        last_name: lastName,
+        role: role,
+        ...(role === "employer" && { company_name: values.fullName }),
+      });
 
       toast({
         title: "Account Created",

@@ -1,18 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import {
-  collection,
-  query,
-  orderBy,
-  onSnapshot,
-  where,
-  getDocs,
-  writeBatch,
-  doc,
-  Timestamp,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { supabase } from "@/lib/supabase";
 
 // ============================================
 // TYPES
@@ -29,7 +18,7 @@ export interface Message {
   id: string;
   senderId: string;
   text: string;
-  timestamp: Timestamp;
+  timestamp: string;
   read: boolean;
   attachments?: Attachment[];
   encrypted?: boolean;
@@ -44,6 +33,7 @@ export interface Message {
 /**
  * Subscribes to messages for the active chat in real-time.
  * Automatically marks unread messages from others as read.
+ * Migrated from Firebase Firestore to Supabase.
  */
 export function useChatMessages(
   activeChatId: string | null,
@@ -58,22 +48,16 @@ export function useChatMessages(
       if (!currentUserId || !chatId) return;
 
       try {
-        const unreadQuery = query(
-          collection(db, "chats", chatId, "messages"),
-          where("read", "==", false),
-          where("senderId", "!=", currentUserId)
-        );
-        const snapshot = await getDocs(unreadQuery);
+        const { error } = await supabase
+          .from("chat_messages")
+          .update({ is_read: true })
+          .eq("chat_id", chatId)
+          .eq("is_read", false)
+          .neq("sender_id", currentUserId);
 
-        if (snapshot.empty) return;
-
-        const batch = writeBatch(db);
-        snapshot.docs.forEach((d) => {
-          batch.update(doc(db, "chats", chatId, "messages", d.id), {
-            read: true,
-          });
-        });
-        await batch.commit();
+        if (error) {
+          console.error("Error marking messages as read:", error);
+        }
       } catch (err) {
         console.error("Error marking messages as read:", err);
       }
@@ -81,7 +65,7 @@ export function useChatMessages(
     [currentUserId]
   );
 
-  // Subscribe to messages + mark as read on open
+  // Fetch messages and subscribe to realtime
   useEffect(() => {
     if (!activeChatId) {
       setMessages([]);
@@ -95,45 +79,104 @@ export function useChatMessages(
       markAsRead(activeChatId);
     }
 
-    const messagesQuery = query(
-      collection(db, "chats", activeChatId, "messages"),
-      orderBy("timestamp", "asc")
-    );
+    // Fetch initial messages
+    const fetchMessages = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("chat_messages")
+          .select("*")
+          .eq("chat_id", activeChatId)
+          .order("created_at", { ascending: true });
 
-    const unsubscribe = onSnapshot(
-      messagesQuery,
-      (snapshot) => {
-        const messageData: Message[] = [];
-        snapshot.forEach((d) => {
-          messageData.push({ id: d.id, ...d.data() } as Message);
-        });
-        setMessages(messageData);
+        if (!error && data) {
+          const messageData: Message[] = data.map((row: any) => ({
+            id: row.id,
+            senderId: row.sender_id,
+            text: row.content || "",
+            timestamp: row.created_at,
+            read: row.is_read ?? false,
+            attachments: row.attachments || undefined,
+            encrypted: row.is_encrypted ?? false,
+            ciphertext: row.ciphertext,
+            iv: row.iv,
+          }));
+          setMessages(messageData);
+        }
+      } catch (error) {
+        console.error("Error fetching messages:", error);
+      } finally {
         setMessagesLoading(false);
+      }
+    };
 
-        // Also mark any new incoming messages as read
-        if (currentUserId) {
-          const hasUnread = snapshot
-            .docChanges()
-            .some(
-              (change) =>
-                change.type === "added" &&
-                change.doc.data().senderId !== currentUserId &&
-                !change.doc.data().read
-            );
-          if (hasUnread) {
+    fetchMessages();
+
+    // Subscribe to realtime changes
+    const channel = supabase
+      .channel(`chat-messages-${activeChatId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: `chat_id=eq.${activeChatId}`,
+        },
+        (payload) => {
+          const row = payload.new as any;
+          const newMessage: Message = {
+            id: row.id,
+            senderId: row.sender_id,
+            text: row.content || "",
+            timestamp: row.created_at,
+            read: row.is_read ?? false,
+            attachments: row.attachments || undefined,
+            encrypted: row.is_encrypted ?? false,
+            ciphertext: row.ciphertext,
+            iv: row.iv,
+          };
+
+          setMessages((prev) => {
+            // Avoid duplicates
+            if (prev.some((m) => m.id === newMessage.id)) return prev;
+            return [...prev, newMessage];
+          });
+
+          // Mark incoming messages as read
+          if (currentUserId && newMessage.senderId !== currentUserId && !newMessage.read) {
             markAsRead(activeChatId);
           }
         }
-      },
-      (error) => {
-        console.error("Error fetching messages:", error);
-        setMessagesLoading(false);
-      }
-    );
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: `chat_id=eq.${activeChatId}`,
+        },
+        (payload) => {
+          const row = payload.new as any;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === row.id
+                ? {
+                    ...m,
+                    read: row.is_read ?? m.read,
+                    text: row.content ?? m.text,
+                  }
+                : m
+            )
+          );
+        }
+      )
+      .subscribe();
 
-    return () => unsubscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [activeChatId, currentUserId, markAsRead]);
 
   return { messages, messagesLoading, markAsRead };
 }
-

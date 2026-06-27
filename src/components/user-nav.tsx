@@ -2,8 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { signOut } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { User, Settings, LogOut, Crown, Sparkles } from 'lucide-react';
@@ -70,7 +69,7 @@ export function UserNav() {
 
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      await supabase.auth.signOut();
       router.push('/login');
     } catch (error) {
       toast({
@@ -95,7 +94,7 @@ export function UserNav() {
     )
   }
 
-  const gradientClass = getGradient(user.uid || user.email || "");
+  const gradientClass = getGradient(user.id || user.email || "");
   const hasPhoto = !!user.photoURL;
   
   // Get user's current plan from profile or default to free
