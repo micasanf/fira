@@ -1,7 +1,8 @@
 "use client";
+
 import { useAuth } from "@/context/AuthContext";
 import { LumaSpin } from "@/components/ui/luma-spin";
-import { Feed } from "@/components/ui/feed";
+import ApplicantDashboard from "@/components/fira-app/ApplicantDashboard";
 
 export default function DashboardPage() {
   const { loading: authLoading } = useAuth();
@@ -14,16 +15,5 @@ export default function DashboardPage() {
     );
   }
 
-  return (
-    <div className="container mx-auto">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold tracking-tight">Community Feed</h1>
-        <p className="text-muted-foreground">
-          Stay connected with the career community.
-        </p>
-      </div>
-
-      <Feed />
-    </div>
-  );
+  return <ApplicantDashboard />;
 }
