@@ -10,14 +10,16 @@ import { Eye, EyeOff } from "lucide-react";
 import Image from "next/image";
 import { supabase } from "@/lib/supabase";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { AnimatedCharacters } from "@/components/ui/animated-characters";
 import { InteractiveHoverButton } from "@/components/ui/interactive-hover-button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+
+// Role is no longer chosen by the user — everyone signs up as a Job Seeker.
+// Admin role is still auto-assigned via NEXT_PUBLIC_ADMIN_EMAILS for whitelisted addresses.
+const DEFAULT_ROLE = "employee" as const;
 
 const signupSchema = z.object({
   fullName: z.string().min(2, { message: "Please enter your full name." }),
@@ -25,7 +27,6 @@ const signupSchema = z.object({
   password: z
     .string()
     .min(6, { message: "Password must be at least 6 characters." }),
-  role: z.enum(["employee", "employer"]).default("employee"),
 });
 
 type SignupFormValues = z.infer<typeof signupSchema>;
@@ -37,6 +38,9 @@ export default function SignupPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  // When the project requires email confirmation, we flip this to true and
+  // render a success panel instead of trying to push into the authenticated app.
+  const [needsEmailConfirmation, setNeedsEmailConfirmation] = useState(false);
 
   const form = useForm<SignupFormValues>({
     resolver: zodResolver(signupSchema),
@@ -44,7 +48,6 @@ export default function SignupPage() {
       fullName: "",
       email: "",
       password: "",
-      role: "employee",
     },
   });
 
@@ -54,13 +57,28 @@ export default function SignupPage() {
     setIsLoading(true);
     setError("");
     try {
-      // Create auth user
+      // Determine admin status from env whitelist (server-side check would be ideal,
+      // but this mirrors the original flow and is fine for redirect routing only).
+      const adminEmails = (
+        process.env.NEXT_PUBLIC_ADMIN_EMAILS || "admin@fira.com.ph"
+      )
+        .split(",")
+        .map((e) => e.trim().toLowerCase());
+      const isAdmin = adminEmails.includes(values.email.toLowerCase());
+      const role = isAdmin ? "admin" : DEFAULT_ROLE;
+
+      // Create auth user. We pass `full_name` AND `role` in user_metadata so the
+      // `handle_new_user` DB trigger (supabase/migration.sql) populates
+      // public.users / public.public_profiles with the correct role on its own.
+      // We deliberately do NOT manually INSERT into those tables afterwards —
+      // doing so caused a duplicate-PK violation against the trigger's insert.
       const { data, error: authError } = await supabase.auth.signUp({
         email: values.email,
         password: values.password,
         options: {
           data: {
             full_name: values.fullName,
+            role,
           },
         },
       });
@@ -68,42 +86,23 @@ export default function SignupPage() {
       if (authError) throw authError;
 
       const user = data.user;
-      if (!user) throw new Error("Failed to create account");
+      if (!user) throw new Error("Failed to create account. Please try again.");
 
-      // Determine role
-      const adminEmails = (process.env.NEXT_PUBLIC_ADMIN_EMAILS || "admin@fira.com.ph")
-        .split(",")
-        .map((e) => e.trim().toLowerCase());
-      const isAdmin = adminEmails.includes(values.email.toLowerCase());
-      const role = isAdmin ? "admin" : values.role;
+      // Email confirmation ON (Supabase default for new projects):
+      // signUp succeeds and returns a user, but no active session. We can't
+      // push them into the protected app — middleware would bounce them back
+      // to /login. Instead, show a clear "check your email" state.
+      if (!data.session) {
+        setNeedsEmailConfirmation(true);
+        toast({
+          title: "Verify your email",
+          description:
+            "We sent a confirmation link to your inbox. Click it to activate your account.",
+        });
+        return;
+      }
 
-      const nameParts = values.fullName.split(" ");
-      const firstName = nameParts[0] || "";
-      const lastName = nameParts.slice(1).join(" ") || "";
-
-      // Insert user profile
-      const { error: profileError } = await supabase.from("users").insert({
-        id: user.id,
-        email: values.email,
-        display_name: values.fullName,
-        first_name: firstName,
-        last_name: lastName,
-        role: role,
-        ...(role === "employer" && { company_name: values.fullName }),
-      });
-
-      if (profileError) console.error("Profile insert error:", profileError);
-
-      // Insert public profile
-      await supabase.from("public_profiles").insert({
-        id: user.id,
-        display_name: values.fullName,
-        first_name: firstName,
-        last_name: lastName,
-        role: role,
-        ...(role === "employer" && { company_name: values.fullName }),
-      });
-
+      // Session exists (email confirmation disabled) — proceed to the app.
       toast({
         title: "Account Created",
         description:
@@ -112,22 +111,81 @@ export default function SignupPage() {
 
       if (role === "admin") {
         router.push("/admin");
-      } else if (role === "employer") {
-        router.push("/employer/dashboard");
       } else {
         router.push("/dashboard");
       }
     } catch (err: any) {
-      setError(err.message || "Something went wrong. Please try again.");
+      const raw = err?.message || "Something went wrong. Please try again.";
+      // Translate the most common Supabase errors into friendlier copy.
+      let friendly = raw;
+      if (/already registered/i.test(raw)) {
+        friendly =
+          "An account with this email already exists. Try signing in instead.";
+      } else if (/rate limit|too many|after \d+ seconds/i.test(raw)) {
+        friendly =
+          "Too many signup attempts. Please wait a moment and try again.";
+      } else if (/password/i.test(raw) && /weak|short|at least/i.test(raw)) {
+        friendly = "Password is too weak. Use at least 6 characters.";
+      }
+      setError(friendly);
       toast({
         title: "Signup Failed",
-        description: err.message,
+        description: friendly,
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Success state shown when the project requires email confirmation.
+  if (needsEmailConfirmation) {
+    return (
+      <div className="min-h-screen grid lg:grid-cols-2">
+        <div className="relative hidden lg:flex flex-col justify-between bg-gradient-to-br from-gray-400 via-gray-500 to-gray-600 dark:from-white/90 dark:via-white/80 dark:to-white/70 p-12 text-white dark:text-gray-900">
+          <div className="relative z-20">
+            <Link
+              href="/"
+              className="flex items-center gap-2 text-lg font-semibold"
+            >
+              <Image
+                src="/favicon.ico"
+                alt="FIRA logo"
+                width={32}
+                height={32}
+                className="bg-white/10 backdrop-blur-sm p-1 rounded-lg"
+              />
+              <span>FIRA</span>
+            </Link>
+          </div>
+          <div className="absolute inset-0 bg-grid-white/[0.05] bg-[size:20px_20px]" />
+        </div>
+
+        <div className="flex items-center justify-center p-8 bg-background">
+          <div className="w-full max-w-[420px] text-center space-y-6">
+            <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto">
+              <Eye className="w-8 h-8 text-primary" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-2xl font-bold tracking-tight">
+                Check your email
+              </h1>
+              <p className="text-muted-foreground text-sm">
+                We sent a verification link to your inbox. Click it to activate
+                your FIRA account, then sign in.
+              </p>
+            </div>
+            <Link
+              href="/login"
+              className="inline-flex items-center justify-center h-12 px-6 text-base font-medium rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Continue to sign in
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen max-h-screen overflow-hidden grid lg:grid-cols-2">
@@ -205,32 +263,14 @@ export default function SignupPage() {
 
           {/* Signup Form */}
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-            <div className="space-y-3">
-              <Label className="text-sm font-medium">I am a...</Label>
-              <RadioGroup
-                defaultValue={form.getValues("role")}
-                onValueChange={(val) => form.setValue("role", val as "employee" | "employer")}
-                className="flex gap-4"
-              >
-                <div className="flex items-center space-x-2 border rounded-xl px-4 py-3 flex-1 cursor-pointer hover:bg-muted/50 transition-colors [&:has([data-state=checked])]:border-primary [&:has([data-state=checked])]:bg-primary/5">
-                  <RadioGroupItem value="employee" id="employee" className="sr-only" />
-                  <Label htmlFor="employee" className="cursor-pointer flex-1 font-medium">Job Seeker</Label>
-                </div>
-                <div className="flex items-center space-x-2 border rounded-xl px-4 py-3 flex-1 cursor-pointer hover:bg-muted/50 transition-colors [&:has([data-state=checked])]:border-primary [&:has([data-state=checked])]:bg-primary/5">
-                  <RadioGroupItem value="employer" id="employer" className="sr-only" />
-                  <Label htmlFor="employer" className="cursor-pointer flex-1 font-medium">Employer</Label>
-                </div>
-              </RadioGroup>
-            </div>
-
             <div className="space-y-2">
               <Label htmlFor="fullName" className="text-sm font-medium">
-                Full Name or Company Name
+                Full Name
               </Label>
               <Input
                 id="fullName"
                 type="text"
-                placeholder="John Doe or Acme Inc."
+                placeholder="John Doe"
                 autoComplete="off"
                 {...form.register("fullName")}
                 onFocus={() => setIsTyping(true)}
