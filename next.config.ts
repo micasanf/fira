@@ -48,7 +48,7 @@ const securityHeaders = [
       // Fonts: self and Google Fonts
       "font-src 'self' https://fonts.gstatic.com",
       // Connect: API endpoints
-      "connect-src 'self' https://*.firebaseio.com https://*.googleapis.com https://api.stripe.com wss://*.firebaseio.com https://firestore.googleapis.com https://*.firebaseapp.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com",
+      "connect-src 'self' https://*.supabase.co https://*.firebaseio.com https://*.googleapis.com https://api.stripe.com wss://*.firebaseio.com wss://*.supabase.co https://firestore.googleapis.com https://*.firebaseapp.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com",
       // Frame ancestors: prevent clickjacking
       "frame-ancestors 'self'",
       // Form actions
