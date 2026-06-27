@@ -82,6 +82,37 @@
   html, body {
     @apply bg-background text-foreground;
     height: 100%;
-    overflow: hidden;
+  }
+  /* Allow scrolling on the landing page */
+  html {
+    overflow-y: auto;
+  }
+}
+
+@layer utilities {
+  /* Hide scrollbar for horizontal scroll containers */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Skip to main content link */
+  .skip-to-main {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 9999;
+    padding: 0.5rem 1rem;
+    background: #0078D7;
+    color: white;
+    font-size: 0.875rem;
+    font-weight: 600;
+    border-radius: 0 0 0.5rem 0;
+  }
+  .skip-to-main:focus {
+    left: 0;
   }
 }
