@@ -114,7 +114,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
       await supabase
         .from("users")
         .upsert(
-          { uid: user.id, encryption_public_key: exportedPublic },
+          { id: user.id, encryption_public_key: exportedPublic },
           { onConflict: "id" }
         );
 
@@ -122,7 +122,7 @@ export function EncryptionProvider({ children }: { children: ReactNode }) {
       await supabase
         .from("public_profiles")
         .upsert(
-          { uid: user.id, encryption_public_key: exportedPublic, updated_at: new Date().toISOString() },
+          { id: user.id, encryption_public_key: exportedPublic, updated_at: new Date().toISOString() },
           { onConflict: "id" }
         );
 

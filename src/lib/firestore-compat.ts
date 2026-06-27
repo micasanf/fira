@@ -7,9 +7,289 @@
  * 
  * All tables use `id` as the primary key column.
  * The `users` table's `id` is the Supabase Auth UID.
+ * 
+ * Key features:
+ * - Auto-converts camelCase field names → snake_case for PostgreSQL columns
+ * - Maps Firebase collection names → PostgreSQL table names
+ * - Handles subcollection patterns (e.g., users/{uid}/savedJobDescriptions)
  */
 
 import { supabase } from './supabase';
+
+// ============ Collection Name Mapping ============
+// Firebase uses camelCase collection names; PostgreSQL uses snake_case table names
+
+const COLLECTION_TO_TABLE: Record<string, string> = {
+  users: 'users',
+  publicProfiles: 'public_profiles',
+  opportunities: 'opportunities',
+  applications: 'applications',
+  posts: 'posts',
+  postComments: 'post_comments',
+  chats: 'chats',
+  chatMessages: 'chat_messages',
+  chat_messages: 'chat_messages',
+  notifications: 'notifications',
+  calls: 'calls',
+  callerIceCandidates: 'caller_ice_candidates',
+  calleeIceCandidates: 'callee_ice_candidates',
+  savedJobDescriptions: 'saved_job_descriptions',
+  savedOpportunities: 'saved_opportunities',
+  followers: 'followers',
+  rateLimits: 'rate_limits',
+  userEncryptionKeys: 'user_encryption_keys',
+  dailyEmailCounts: 'daily_email_counts',
+  monthlyEmailCounts: 'monthly_email_counts',
+};
+
+function resolveTableName(collection: string): string {
+  return COLLECTION_TO_TABLE[collection] || collection;
+}
+
+// ============ Field Name Mapping ============
+// Convert camelCase → snake_case for PostgreSQL column compatibility
+
+function camelToSnake(str: string): string {
+  return str.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+}
+
+function snakeToCamel(str: string): string {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+// Known field aliases: Firebase field name → PostgreSQL column name
+// Use this for fields that don't follow simple camelCase → snake_case conversion
+const FIELD_ALIASES: Record<string, Record<string, string>> = {
+  applications: {
+    userId: 'user_id',
+    opportunityId: 'opportunity_id',
+    employerId: 'employer_id',
+    submittedAt: 'submitted_at',
+    updatedAt: 'updated_at',
+    userEmail: 'user_email',
+    userName: 'user_name',
+    withdrawnAt: 'withdrawn_at',
+    columnName: 'column_name',
+    isManual: 'is_manual',
+    jobUrl: 'job_url',
+    resumeUrl: 'resume_url',
+    coverLetter: 'cover_letter',
+    appliedAt: 'applied_at',
+  },
+  opportunities: {
+    employerId: 'employer_id',
+    employerName: 'employer_name',
+    employerPhotoURL: 'employer_photo_url',
+    companyLogo: 'company_logo',
+    companyOverview: 'company_overview',
+    experienceLevel: 'experience_level',
+    salaryMin: 'salary_min',
+    salaryMax: 'salary_max',
+    salaryCurrency: 'salary_currency',
+    jobType: 'job_type',
+    isRemote: 'is_remote',
+    isFeatured: 'is_featured',
+    is_active: 'is_active',
+    applicationCount: 'application_count',
+    applicationsCount: 'application_count',
+    applicants: 'application_count',
+    viewsCount: 'views_count',
+    postedAt: 'posted_at',
+    updatedAt: 'updated_at',
+    expiresAt: 'expires_at',
+    createdAt: 'created_at',
+    preferredQualifications: 'preferred_qualifications',
+    rolesAndResponsibilities: 'roles_and_responsibilities',
+    compensationAndBenefits: 'compensation_and_benefities',
+    workingHours: 'working_hours',
+    travelRequirements: 'travel_requirements',
+    applicationInstructions: 'application_instructions',
+    legalStatement: 'legal_statement',
+  },
+  users: {
+    displayName: 'display_name',
+    firstName: 'first_name',
+    lastName: 'last_name',
+    photoURL: 'photo_url',
+    coverPhoto: 'cover_photo',
+    companyName: 'company_name',
+    companyWebsite: 'company_website',
+    companyDescription: 'company_description',
+    companyLogoUrl: 'company_logo_url',
+    companyIndustry: 'company_industry',
+    companySize: 'company_size',
+    stripeCustomerId: 'stripe_customer_id',
+    stripeSubscriptionId: 'stripe_subscription_id',
+    subscriptionStatus: 'subscription_status',
+    planUpdatedAt: 'plan_updated_at',
+    lastWebhookEventId: 'last_webhook_event_id',
+    resumeUrl: 'resume_url',
+    coverLetterUrl: 'cover_letter_url',
+    portfolioLink: 'portfolio_link',
+    linkedinLink: 'linkedin',
+    linkedinUrl: 'linkedin',
+    githubLink: 'github',
+    githubUrl: 'github',
+    websiteLink: 'website',
+    websiteUrl: 'website',
+    employmentHistory: 'employment_history',
+    careerGoals: 'career_goals',
+    encryptionPublicKey: 'encryption_public_key',
+    firstLoginAt: 'first_login_at',
+    lastLoginAt: 'last_login_at',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+  },
+  public_profiles: {
+    displayName: 'display_name',
+    firstName: 'first_name',
+    lastName: 'last_name',
+    photoURL: 'photo_url',
+    coverPhoto: 'cover_photo',
+    companyName: 'company_name',
+    companyOverview: 'company_overview',
+    companyLogoUrl: 'company_logo_url',
+    companySize: 'company_size',
+    supportEmail: 'support_email',
+    contactNumber: 'contact_number',
+    portfolioLink: 'portfolio_link',
+    portfolioProjects: 'portfolio_projects',
+    linkedinLink: 'linkedin',
+    linkedinUrl: 'linkedin',
+    githubLink: 'github',
+    githubUrl: 'github',
+    twitterLink: 'twitter',
+    twitterUrl: 'twitter',
+    websiteLink: 'website',
+    websiteUrl: 'website',
+    employmentHistory: 'employment_history',
+    careerGoals: 'career_goals',
+    encryptionPublicKey: 'encryption_public_key',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+  },
+  notifications: {
+    userId: 'user_id',
+    actorId: 'actor_id',
+    actorName: 'actor_name',
+    actorPhotoUrl: 'actor_photo_url',
+    isRead: 'is_read',
+    read: 'is_read',
+    createdAt: 'created_at',
+  },
+  chats: {
+    participantDetails: 'participant_details',
+    participantNames: 'participant_names',
+    participantPhotos: 'participant_photos',
+    lastMessage: 'last_message',
+    lastMessageAt: 'last_message_at',
+    lastSenderId: 'last_sender_id',
+    unreadCount: 'unread_count',
+    hiddenFor: 'hidden_for',
+    isGroup: 'is_group',
+    groupName: 'group_name',
+    opportunityId: 'opportunity_id',
+    opportunityTitle: 'opportunity_title',
+    applicationId: 'application_id',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+  },
+  chat_messages: {
+    chatId: 'chat_id',
+    senderId: 'sender_id',
+    isRead: 'is_read',
+    isEncrypted: 'is_encrypted',
+    messageType: 'message_type',
+    createdAt: 'created_at',
+  },
+  calls: {
+    callerId: 'caller_id',
+    calleeId: 'callee_id',
+    callerName: 'caller_name',
+    calleeName: 'callee_name',
+    opportunityId: 'opportunity_id',
+    opportunityTitle: 'opportunity_title',
+    startedAt: 'started_at',
+    endedAt: 'ended_at',
+    createdAt: 'created_at',
+  },
+  saved_job_descriptions: {
+    userId: 'user_id',
+    fileName: 'file_name',
+    aiEnhancedText: 'ai_enhanced_text',
+    isEnhanced: 'is_enhanced',
+    originalText: 'original_text',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+  },
+  posts: {
+    userId: 'user_id',
+    userName: 'user_name',
+    userPhoto: 'user_photo',
+    userRole: 'user_role',
+    userTitle: 'user_title',
+    imageUrl: 'image_url',
+    commentsCount: 'comments_count',
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+  },
+  post_comments: {
+    postId: 'post_id',
+    authorId: 'author_id',
+    createdAt: 'created_at',
+  },
+  saved_opportunities: {
+    userId: 'user_id',
+    opportunityId: 'opportunity_id',
+    createdAt: 'created_at',
+  },
+  followers: {
+    followerId: 'follower_id',
+    followingId: 'following_id',
+    createdAt: 'created_at',
+  },
+  caller_ice_candidates: {
+    callId: 'call_id',
+    createdAt: 'created_at',
+  },
+  callee_ice_candidates: {
+    callId: 'call_id',
+    createdAt: 'created_at',
+  },
+};
+
+function mapFieldToColumn(collection: string, field: string): string {
+  const table = resolveTableName(collection);
+  const aliases = FIELD_ALIASES[table] || FIELD_ALIASES[collection] || {};
+  if (aliases[field]) return aliases[field];
+  // If already snake_case, return as-is
+  if (field.includes('_')) return field;
+  // Fallback: convert camelCase → snake_case
+  return camelToSnake(field);
+}
+
+function mapRecordToColumns(collection: string, data: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data)) {
+    const col = mapFieldToColumn(collection, key);
+    result[col] = value;
+  }
+  return result;
+}
+
+function mapRecordFromColumns(data: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data)) {
+    // Convert snake_case back to camelCase for Firestore-style access
+    result[key] = value;
+    // Also provide camelCase alias
+    const camelKey = snakeToCamel(key);
+    if (camelKey !== key) {
+      result[camelKey] = value;
+    }
+  }
+  return result;
+}
 
 // ============ Special Value Markers ============
 // These are used in updateDoc() to represent atomic operations
@@ -58,15 +338,11 @@ export const FieldValue = {
 // - doc(db, "users", userId, "applications", appId) → subcollection pattern
 export function doc(_db: any, ...args: string[]) {
   if (args.length === 2) {
-    // Simple: doc(db, "collection", "id")
     return { collection: args[0], id: args[1] };
   }
   if (args.length === 4) {
-    // Subcollection: doc(db, "parentCollection", "parentId", "subCollection", "subId")
-    // Map to: { collection: "subCollection", id: "subId", parentId: args[1], parentCollection: args[0] }
     return { collection: args[2], id: args[3], parentId: args[1], parentCollection: args[0] };
   }
-  // Fallback
   return { collection: args[0], id: args[1] };
 }
 
@@ -78,11 +354,17 @@ export function collection(_db: any, ...args: string[]) {
     return { collection: args[0] };
   }
   if (args.length === 3) {
-    // Subcollection: collection(db, "parentCollection", "parentId", "subCollection")
-    // Map to: { collection: "subCollection", parentId: args[1], parentCollection: args[0] }
     return { collection: args[2], parentId: args[1], parentCollection: args[0] };
   }
   return { collection: args[0] };
+}
+
+// ============ Subcollection parent field resolver ============
+
+function getParentField(parentCollection: string): string {
+  // Map parent collection name → FK column name
+  if (parentCollection === 'users') return 'user_id';
+  return `${camelToSnake(parentCollection)}_id`;
 }
 
 // ============ Get Operations ============
@@ -90,51 +372,57 @@ export function collection(_db: any, ...args: string[]) {
 export async function getDoc(ref: any) {
   if (!ref.id) throw new Error('Document ID required');
   
-  let q = supabase.from(ref.collection).select('*').eq('id', ref.id);
+  const table = resolveTableName(ref.collection);
+  let q = supabase.from(table).select('*').eq('id', ref.id);
   
   // Add parent filter for subcollection patterns
   if (ref.parentId && ref.parentCollection) {
-    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    const parentField = getParentField(ref.parentCollection);
     q = q.eq(parentField, ref.parentId);
   }
   
   const { data, error } = await q.single();
   
+  const mappedData = data ? mapRecordFromColumns(data) : null;
+  
   return {
     exists: () => !!data,
-    data: () => data,
+    data: () => mappedData,
     id: ref.id,
-    get: (field: string) => data?.[field],
+    get: (field: string) => mappedData?.[field] ?? mappedData?.[mapFieldToColumn(ref.collection, field)],
   };
 }
 
 export async function getDocs(queryRef: any) {
-  let q = supabase.from(queryRef.collection || queryRef.table).select('*');
+  const table = resolveTableName(queryRef.collection || queryRef.table);
+  let q = supabase.from(table).select('*');
   
   // Add parent filter for subcollection patterns
   if (queryRef.parentId && queryRef.parentCollection) {
-    const parentField = queryRef.parentCollection === 'users' ? 'userId' : `${queryRef.parentCollection}Id`;
+    const parentField = getParentField(queryRef.parentCollection);
     q = q.eq(parentField, queryRef.parentId);
   }
   
   // Apply filters if any
   if (queryRef.filters) {
     for (const f of queryRef.filters) {
-      if (f.op === '==') q = q.eq(f.field, f.value);
-      else if (f.op === '!=') q = q.neq(f.field, f.value);
-      else if (f.op === '>') q = q.gt(f.field, f.value);
-      else if (f.op === '<') q = q.lt(f.field, f.value);
-      else if (f.op === '>=') q = q.gte(f.field, f.value);
-      else if (f.op === '<=') q = q.lte(f.field, f.value);
-      else if (f.op === 'in') q = q.in(f.field, f.value);
-      else if (f.op === 'array-contains') q = q.contains(f.field, [f.value]);
+      const col = mapFieldToColumn(queryRef.collection || queryRef.table, f.field);
+      if (f.op === '==') q = q.eq(col, f.value);
+      else if (f.op === '!=') q = q.neq(col, f.value);
+      else if (f.op === '>') q = q.gt(col, f.value);
+      else if (f.op === '<') q = q.lt(col, f.value);
+      else if (f.op === '>=') q = q.gte(col, f.value);
+      else if (f.op === '<=') q = q.lte(col, f.value);
+      else if (f.op === 'in') q = q.in(col, f.value);
+      else if (f.op === 'array-contains') q = q.contains(col, [f.value]);
     }
   }
   
   // Apply ordering
   if (queryRef.orders) {
     for (const o of queryRef.orders) {
-      q = q.order(o.field, { ascending: o.ascending });
+      const col = mapFieldToColumn(queryRef.collection || queryRef.table, o.field);
+      q = q.order(col, { ascending: o.ascending });
     }
   }
   
@@ -146,12 +434,15 @@ export async function getDocs(queryRef: any) {
   const { data, error } = await q;
   
   return {
-    docs: (data || []).map((doc: any) => ({
-      id: doc.id,
-      data: () => doc,
-      exists: true,
-      get: (field: string) => doc[field],
-    })),
+    docs: (data || []).map((doc: any) => {
+      const mapped = mapRecordFromColumns(doc);
+      return {
+        id: doc.id,
+        data: () => mapped,
+        exists: true,
+        get: (field: string) => mapped[field] ?? mapped[mapFieldToColumn(queryRef.collection, field)],
+      };
+    }),
     empty: !data || data.length === 0,
     size: data?.length || 0,
   };
@@ -166,16 +457,18 @@ export async function setDoc(
 ) {
   if (!ref.id) throw new Error('Document ID required');
   
-  let record = { id: ref.id, ...data };
+  const table = resolveTableName(ref.collection);
+  let mappedData = mapRecordToColumns(ref.collection, data);
+  let record = { id: ref.id, ...mappedData };
   
   // Add parent reference for subcollection patterns
   if (ref.parentId && ref.parentCollection) {
-    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    const parentField = getParentField(ref.parentCollection);
     record[parentField] = ref.parentId;
   }
   
   const { error } = await supabase
-    .from(ref.collection)
+    .from(table)
     .upsert(record, { onConflict: 'id' });
   
   if (error) throw error;
@@ -186,16 +479,18 @@ export async function addDoc(
   ref: any,
   data: any
 ) {
-  let record = { ...data };
+  const table = resolveTableName(ref.collection);
+  let mappedData = mapRecordToColumns(ref.collection, data);
+  let record = { ...mappedData };
   
   // Add parent reference for subcollection patterns
   if (ref.parentId && ref.parentCollection) {
-    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    const parentField = getParentField(ref.parentCollection);
     record[parentField] = ref.parentId;
   }
   
   const { data: result, error } = await supabase
-    .from(ref.collection)
+    .from(table)
     .insert(record)
     .select()
     .single();
@@ -210,6 +505,7 @@ async function applySpecialMarkers(
   id: string,
   data: Record<string, any>
 ): Promise<Record<string, any>> {
+  const table = resolveTableName(collection);
   const processedData: Record<string, any> = {};
   let needsRead = false;
 
@@ -227,7 +523,7 @@ async function applySpecialMarkers(
 
   if (needsRead) {
     const { data: existing } = await supabase
-      .from(collection)
+      .from(table)
       .select('*')
       .eq('id', id)
       .single();
@@ -235,26 +531,24 @@ async function applySpecialMarkers(
   }
 
   for (const [key, value] of Object.entries(data)) {
+    const col = mapFieldToColumn(collection, key);
     if (value && typeof value === 'object') {
       if (value.__type === 'arrayUnion') {
-        // Append elements to array
-        const currentArray = currentData?.[key] || [];
-        processedData[key] = [...currentArray, ...value.elements];
+        const currentArray = currentData?.[col] || [];
+        processedData[col] = [...currentArray, ...value.elements];
       } else if (value.__type === 'arrayRemove') {
-        // Remove elements from array
-        const currentArray = currentData?.[key] || [];
-        processedData[key] = currentArray.filter(
+        const currentArray = currentData?.[col] || [];
+        processedData[col] = currentArray.filter(
           (item: any) => !value.elements.some(el => JSON.stringify(el) === JSON.stringify(item))
         );
       } else if (value.__type === 'increment') {
-        // Increment numeric value
-        const currentVal = currentData?.[key] || 0;
-        processedData[key] = currentVal + value.value;
+        const currentVal = currentData?.[col] || 0;
+        processedData[col] = currentVal + value.value;
       } else {
-        processedData[key] = value;
+        processedData[col] = value;
       }
     } else {
-      processedData[key] = value;
+      processedData[col] = value;
     }
   }
 
@@ -267,13 +561,14 @@ export async function updateDoc(
 ) {
   if (!ref.id) throw new Error('Document ID required');
   
+  const table = resolveTableName(ref.collection);
   const processedData = await applySpecialMarkers(ref.collection, ref.id, data);
   
-  let q = supabase.from(ref.collection).update(processedData).eq('id', ref.id);
+  let q = supabase.from(table).update(processedData).eq('id', ref.id);
   
   // Add parent filter for subcollection patterns
   if (ref.parentId && ref.parentCollection) {
-    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    const parentField = getParentField(ref.parentCollection);
     q = q.eq(parentField, ref.parentId);
   }
   
@@ -286,11 +581,12 @@ export async function deleteDoc(
 ) {
   if (!ref.id) throw new Error('Document ID required');
   
-  let q = supabase.from(ref.collection).delete().eq('id', ref.id);
+  const table = resolveTableName(ref.collection);
+  let q = supabase.from(table).delete().eq('id', ref.id);
   
   // Add parent filter for subcollection patterns
   if (ref.parentId && ref.parentCollection) {
-    const parentField = ref.parentCollection === 'users' ? 'userId' : `${ref.parentCollection}Id`;
+    const parentField = getParentField(ref.parentCollection);
     q = q.eq(parentField, ref.parentId);
   }
   
@@ -346,22 +642,25 @@ export function onSnapshot(
   callback: (snapshot: any) => void,
   errorCallback?: (error: any) => void
 ) {
+  const table = resolveTableName(ref.collection);
+  
   // For document snapshots
   if (ref.id && !ref.parentId) {
     const channel = supabase
-      .channel(`doc-${ref.collection}-${ref.id}`)
+      .channel(`doc-${table}-${ref.id}`)
       .on(
         'postgres_changes',
         {
           event: '*',
           schema: 'public',
-          table: ref.collection,
+          table: table,
           filter: `id=eq.${ref.id}`,
         },
         async (payload) => {
+          const mapped = mapRecordFromColumns(payload.new);
           callback({
             exists: () => true,
-            data: () => payload.new,
+            data: () => mapped,
             id: ref.id,
           });
         }
@@ -376,13 +675,13 @@ export function onSnapshot(
   
   // For collection snapshots (including subcollections)
   const channel = supabase
-    .channel(`collection-${ref.collection}-${ref.parentId || 'all'}`)
+    .channel(`collection-${table}-${ref.parentId || 'all'}`)
     .on(
       'postgres_changes',
       {
         event: '*',
         schema: 'public',
-        table: ref.collection,
+        table: table,
       },
       async () => {
         // Refetch all docs
@@ -419,8 +718,9 @@ export async function runTransaction(
         },
         update: async (ref: { collection: string; id?: string }, data: any) => {
           const processedData = await applySpecialMarkers(ref.collection, ref.id!, data);
+          const table = resolveTableName(ref.collection);
           const { error } = await supabase
-            .from(ref.collection)
+            .from(table)
             .update(processedData)
             .eq('id', ref.id);
           if (error) throw error;
