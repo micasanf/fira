@@ -191,19 +191,27 @@ export default function AuthModal() {
           },
         });
         if (authError) throw authError;
-        if (!data.user) throw new Error('Failed to create account. Please try again.');
 
-        // Email confirmation required (no session)
+        // Email confirmation required: Supabase returns either (a) a user but no
+        // session, or (b) nothing at all (when OTP confirmation is enabled). In
+        // both cases the account has been created in auth.users — the user just
+        // needs to click the link in the confirmation email before they can sign in.
         if (!data.session) {
           toast({
-            title: 'Verify your email',
-            description: 'We sent a confirmation link to your inbox. Click it to activate your account.',
+            title: 'Account created — check your email',
+            description:
+              'We sent a verification link to ' +
+              registerForm.email +
+              '. Click it to activate your account, then sign in.',
           });
+          setRegisterForm({ fullName: '', email: '', password: '', confirmPassword: '' });
           closeAuthModal();
-          router.push('/login');
+          // Re-open on the Sign In tab so the user can sign in after confirming.
+          openAuthModal('login');
           return;
         }
 
+        // Session exists (email confirmation disabled) — proceed to the app.
         toast({
           title: 'Account created!',
           description: 'Welcome to FIRA!',
