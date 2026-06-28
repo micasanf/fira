@@ -388,9 +388,9 @@ function OpportunitiesContent() {
                               {skill.trim()}
                             </Badge>
                           ))}
-                        {opportunity.skills.split(",").length > 3 && (
+                        {(Array.isArray(opportunity.skills) ? opportunity.skills.length : typeof opportunity.skills === "string" ? opportunity.skills.split(",").length : 0) > 3 && (
                           <Badge variant="outline" className="text-xs rounded-full">
-                            +{opportunity.skills.split(",").length - 3}
+                            +{(Array.isArray(opportunity.skills) ? opportunity.skills.length : typeof opportunity.skills === "string" ? opportunity.skills.split(",").length : 0) - 3}
                           </Badge>
                         )}
                       </div>

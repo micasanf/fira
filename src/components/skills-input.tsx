@@ -24,12 +24,13 @@ export function SkillsInput({
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Parse skills from comma-separated string
+  // Parse skills from comma-separated string or array (Supabase TEXT[])
   const skills = value
-    ? value
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
+    ? Array.isArray(value)
+      ? value.map((s) => String(s).trim()).filter(Boolean)
+      : typeof value === "string"
+        ? value.split(",").map((s) => s.trim()).filter(Boolean)
+        : []
     : [];
 
   const addSkill = (skill: string) => {

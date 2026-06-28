@@ -70,7 +70,7 @@ const OpportunityCard = React.forwardRef<HTMLDivElement, OpportunityCardProps>(
     // Process skills into array
     const skillsArray =
       typeof skills === "string"
-        ? skills.split(",").map((s) => s.trim())
+        ? (Array.isArray(skills) ? skills : typeof skills === "string" ? skills.split(",").map((s) => s.trim()) : [])
         : skills || [];
 
     // Format date

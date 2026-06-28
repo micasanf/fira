@@ -97,7 +97,7 @@ export function HoverProfileCard({
 
   // Parse skills string into array
   const skillsArray = profile?.skills
-    ? profile.skills.split(",").map((s) => s.trim()).filter(Boolean)
+    ? (Array.isArray(profile.skills) ? profile.skills : typeof profile.skills === "string" ? profile.skills.split(",").map((s) => s.trim()).filter(Boolean) : [])
     : []
 
   return (
