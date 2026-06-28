@@ -25,6 +25,38 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
+  // ── Handle OAuth PKCE code exchange ──────────────────────────
+  // When Google redirects back, the URL is /dashboard?code=<pkce_code>.
+  // The middleware exchanges the code for a session (server-side), then
+  // redirects to the SAME URL without the code param. This prevents the
+  // client-side Supabase SDK from trying to re-exchange the (now used,
+  // single-use) code — which would fail and clear the session, leaving
+  // the page stuck loading forever.
+  const code = request.nextUrl.searchParams.get('code');
+  if (code) {
+    // Exchange the PKCE code for a session. The code_verifier is read
+    // from a cookie that was set by signInWithOAuth() on the client.
+    await supabase.auth.exchangeCodeForSession(request.url);
+
+    // Build the clean URL (same path, same non-OAuth params, no code).
+    const cleanUrl = request.nextUrl.clone();
+    cleanUrl.searchParams.delete('code');
+    cleanUrl.searchParams.delete('error');
+    cleanUrl.searchParams.delete('error_code');
+    cleanUrl.searchParams.delete('error_description');
+    cleanUrl.searchParams.delete('provider');
+    cleanUrl.searchParams.delete('provider_token');
+    cleanUrl.searchParams.delete('provider_refresh_token');
+
+    const redirectResponse = NextResponse.redirect(cleanUrl);
+    // Carry over the session cookies that exchangeCodeForSession just set.
+    for (const cookie of supabaseResponse.cookies.getAll()) {
+      redirectResponse.cookies.set(cookie);
+    }
+    return redirectResponse;
+  }
+
+  // ── Normal request (no code in URL) ──────────────────────────
   const {
     data: { user },
   } = await supabase.auth.getUser();
