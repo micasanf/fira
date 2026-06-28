@@ -237,6 +237,7 @@ export default function AuthModal() {
           .eq('id', data.user.id)
           .single();
         if (profile?.role === 'admin') router.push('/admin');
+        else if (profile?.role === 'employer') router.push('/employer/dashboard');
         else router.push('/dashboard');
       } catch (err: any) {
         const raw = err?.message || 'Login failed. Please try again.';
