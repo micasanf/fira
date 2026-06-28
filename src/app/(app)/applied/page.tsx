@@ -67,7 +67,7 @@ export default function AppliedPage() {
         // Fetch the current user's applications from Supabase.
         const { data: apps, error } = await supabase
           .from('applications')
-          .select('id, status, created_at, opportunity_id, opportunities(id, title, employer_name, location, country)')
+          .select('id, status, created_at, opportunity_id, opportunities(id, title, employer_name, location)')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false });
 

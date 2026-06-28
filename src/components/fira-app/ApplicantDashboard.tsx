@@ -154,7 +154,7 @@ export default function ApplicantDashboard() {
         // Try to fetch real applications from Supabase; fall back to mock data.
         const { data: appsData, error } = await supabase
           .from('applications')
-          .select('id, status, created_at, opportunity_id, opportunities(id, title, country, employer_name)')
+          .select('id, status, created_at, opportunity_id, opportunities(id, title, location, employer_name)')
           .eq('applicant_id', user.id)
           .order('created_at', { ascending: false })
           .limit(10);
@@ -174,7 +174,7 @@ export default function ApplicantDashboard() {
               description: '',
               salaryCurrency: 'USD',
               employmentType: 'Full-time',
-              country: a.opportunities.country || '',
+              country: a.opportunities.location || '',
               status: 'active',
               isFeatured: false,
               isUrgent: false,

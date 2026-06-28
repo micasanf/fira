@@ -98,16 +98,16 @@ export default function EmployerDashboard() {
         if (user?.id) {
           const { data: jobsData, error: jobsErr } = await supabase
             .from('opportunities')
-            .select('id, title, country, status, created_at, employer_id, current_applicants')
+            .select('id, title, location, status, posted_at, employer_id, application_count')
             .eq('employer_id', user.id)
-            .order('created_at', { ascending: false })
+            .order('posted_at', { ascending: false })
             .limit(10);
           if (!jobsErr && jobsData && jobsData.length > 0) {
             setJobs(jobsData.map((j: any) => ({
               id: j.id, title: j.title, slug: j.id, description: '', salaryCurrency: 'USD',
-              employmentType: 'Full-time', country: j.country || '', status: j.status || 'active',
-              isFeatured: false, isUrgent: false, currentApplicants: j.current_applicants || 0,
-              viewsCount: 0, bookmarksCount: 0, createdAt: j.created_at,
+              employmentType: 'Full-time', country: j.location || '', status: j.status || 'active',
+              isFeatured: false, isUrgent: false, currentApplicants: j.application_count || 0,
+              viewsCount: 0, bookmarksCount: 0, createdAt: j.posted_at,
             })));
           } else {
             setJobs(MOCK_POSTED_JOBS);
