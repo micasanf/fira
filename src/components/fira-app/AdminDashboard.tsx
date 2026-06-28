@@ -34,7 +34,7 @@ const categoryChartConfig: ChartConfig = {
   construction: { label: 'Construction', color: '#f59e0b' },
   hospitality: { label: 'Hospitality', color: '#22c55e' },
   engineering: { label: 'Engineering', color: '#0078D7' },
-  it: { label: 'IT', color: '#8b5cf6' },
+  caregiving: { label: 'Caregiving', color: '#8b5cf6' },
 };
 const trendChartConfig: ChartConfig = {
   applicants: { label: 'Applicants', color: '#0078D7' },
@@ -70,7 +70,7 @@ const MOCK_COUNTRY_DATA = [
 const MOCK_CATEGORY_DATA = [
   { name: 'healthcare', value: 1500 }, { name: 'construction', value: 980 },
   { name: 'hospitality', value: 650 }, { name: 'engineering', value: 520 },
-  { name: 'it', value: 380 }, { name: 'domestic', value: 280 },
+  { name: 'caregiving', value: 580 }, { name: 'domestic', value: 280 },
   { name: 'education', value: 190 }, { name: 'manufacturing', value: 120 },
 ];
 

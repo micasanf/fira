@@ -14,7 +14,7 @@ const categories: CategoryItem[] = [
   { name: 'Construction', slug: 'construction', emoji: '🏗️', jobCount: 182, color: '#D97706', gradient: 'from-amber-50 to-amber-100/60' },
   { name: 'Hospitality', slug: 'hospitality', emoji: '🏨', jobCount: 156, color: '#059669', gradient: 'from-emerald-50 to-emerald-100/60' },
   { name: 'Engineering', slug: 'engineering', emoji: '⚙️', jobCount: 134, color: '#0078D7', gradient: 'from-sky-50 to-sky-100/60' },
-  { name: 'IT & Technology', slug: 'it-technology', emoji: '💻', jobCount: 198, color: '#7C3AED', gradient: 'from-violet-50 to-violet-100/60' },
+  { name: 'Caregiving', slug: 'caregiving', emoji: '🧓', jobCount: 312, color: '#7C3AED', gradient: 'from-violet-50 to-violet-100/60' },
   { name: 'Domestic Work', slug: 'domestic-work', emoji: '🏠', jobCount: 89, color: '#0D9488', gradient: 'from-teal-50 to-teal-100/60' },
   { name: 'Manufacturing', slug: 'manufacturing', emoji: '🏭', jobCount: 112, color: '#EA580C', gradient: 'from-orange-50 to-orange-100/60' },
   { name: 'Education', slug: 'education', emoji: '📚', jobCount: 76, color: '#4F46E5', gradient: 'from-indigo-50 to-indigo-100/60' },
