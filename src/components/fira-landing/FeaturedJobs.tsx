@@ -24,7 +24,7 @@ const mockJobs: MockJob[] = [
 function getCategoryColor(category: string): string {
   const map: Record<string, string> = {
     healthcare: '#E11D48', construction: '#D97706', hospitality: '#059669', engineering: '#0078D7',
-    'it-technology': '#7C3AED', manufacturing: '#EA580C', education: '#4F46E5',
+    'caregiving': '#7C3AED', manufacturing: '#EA580C', education: '#4F46E5',
   };
   return map[category?.toLowerCase()] || '#0078D7';
 }

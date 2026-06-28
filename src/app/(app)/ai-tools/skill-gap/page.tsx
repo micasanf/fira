@@ -231,7 +231,7 @@ export default function SkillGapPage() {
                 <Input
                   value={jobTitle}
                   onChange={(e) => setJobTitle(e.target.value)}
-                  placeholder="Senior Frontend Developer"
+                  placeholder="Senior Caregiver"
                 />
               </div>
               <div className="space-y-2">

@@ -697,7 +697,7 @@ export default function ProfileEditPage() {
                           <FormLabel>Headline</FormLabel>
                           <FormControl>
                             <Input
-                              placeholder="Senior Frontend Engineer"
+                              placeholder="Senior Caregiver"
                               {...field}
                             />
                           </FormControl>

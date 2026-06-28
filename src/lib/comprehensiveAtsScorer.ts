@@ -440,7 +440,7 @@ export function demonstrateComprehensiveScoring(): void {
   const scorer = new ComprehensiveATSScorer();
 
   const resumeText = `
-    Senior Full Stack Developer with 5+ years of experience in React, Node.js, TypeScript, 
+    Senior Caregiver with 5+ years of experience in elderly care, CPR, first aid, patient handling, 
     and AWS. Led development of microservices architecture using Docker and Kubernetes. 
     Implemented CI/CD pipelines with Jenkins. AWS Certified Solutions Architect. 
     Master's degree in Computer Science from Stanford University.

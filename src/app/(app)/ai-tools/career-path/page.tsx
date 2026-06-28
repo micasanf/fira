@@ -98,7 +98,7 @@ export default function CareerPathPage() {
               <div className="space-y-2">
                 <label className="text-sm font-medium">Current Role *</label>
                 <Input
-                  placeholder="e.g. Junior Software Developer"
+                  placeholder="e.g. Senior Caregiver"
                   value={currentRole}
                   onChange={(e) => setCurrentRole(e.target.value)}
                   className="rounded-full"
