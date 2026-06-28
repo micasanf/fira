@@ -84,7 +84,15 @@ export default function ResumeBuilderPage() {
         newResume.header.email = user.email || '';
         newResume.header.linkedin = userProfile.linkedinLink || '';
         if (userProfile.skills) {
-          newResume.skills.technical = userProfile.skills.split(',').map((s: string) => s.trim()).filter(Boolean);
+          // Supabase returns skills as TEXT[] (array). Firebase returned a string.
+          // Handle both shapes safely.
+          const raw = userProfile.skills as unknown;
+          const skillsArray: string[] = Array.isArray(raw)
+            ? (raw as string[])
+            : typeof raw === 'string'
+              ? (raw as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+              : [];
+          newResume.skills.technical = skillsArray;
         }
       }
       setResume(newResume);

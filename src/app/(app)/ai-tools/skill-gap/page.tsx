@@ -55,7 +55,11 @@ export default function SkillGapPage() {
   const [jobTitle, setJobTitle] = useState("");
   const [jobDescription, setJobDescription] = useState("");
   const [skills, setSkills] = useState<string[]>(
-    userProfile?.skills?.split(",").map((s: string) => s.trim()).filter(Boolean) || []
+    Array.isArray(userProfile?.skills)
+      ? (userProfile!.skills as unknown as string[])
+      : typeof userProfile?.skills === 'string'
+        ? (userProfile!.skills as unknown as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+        : []
   );
   const [skillInput, setSkillInput] = useState("");
   const [experience, setExperience] = useState("");

@@ -57,7 +57,11 @@ export default function LinkedInOptimizerPage() {
   const [currentHeadline, setCurrentHeadline] = useState("");
   const [currentAbout, setCurrentAbout] = useState("");
   const [skills, setSkills] = useState<string[]>(
-    userProfile?.skills?.split(",").map((s: string) => s.trim()).filter(Boolean) || []
+    Array.isArray(userProfile?.skills)
+      ? (userProfile!.skills as unknown as string[])
+      : typeof userProfile?.skills === 'string'
+        ? (userProfile!.skills as unknown as string).split(',').map((s: string) => s.trim()).filter(Boolean)
+        : []
   );
   const [skillInput, setSkillInput] = useState("");
 
